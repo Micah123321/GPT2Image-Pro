@@ -159,6 +159,8 @@ type ResolveBackendOptions = {
   // Web；审核提示词修剪用 text 模式寻找任意有效 Web。开启后遍历全部启用分组，只返回
   // accountBackend==="web" 的账号成员，不受外部 key 所绑分组限制。
   spanGroupsForWeb?: boolean;
+  // 仅选 priority 严格大于该值的成员。同优先级换号预算用尽后，用来跳进下一档优先级。
+  minPriorityExclusive?: number;
 };
 
 type StickyBindingMember = {
@@ -2358,7 +2360,8 @@ async function selectPoolMember(
   staleRetryCount = 0,
   capacityWaitCount = 0,
   accountPlanFilter: ImageBackendAccountPlanFilter = "any",
-  webRequestMode: "image" | "text" = "image"
+  webRequestMode: "image" | "text" = "image",
+  minPriorityExclusive?: number
 ): Promise<PoolMember | null> {
   // 只看目标主组；mixed 组选中 Web 子组时仍保留其原始模型与 Adobe 路由规则。
   const modelRouting = resolvePoolModelRouting({
@@ -2930,7 +2933,12 @@ async function selectPoolMember(
     ...apiMembers,
     ...accountMembers,
     ...adobeMembers,
-  ].filter((member) => !excluded?.has(backendKey(member)));
+  ].filter(
+    (member) =>
+      !excluded?.has(backendKey(member)) &&
+      (minPriorityExclusive === undefined ||
+        member.priority > minPriorityExclusive)
+  );
   const availableCandidates = notExcludedCandidates.filter(hasBackendCapacity);
   // 仅因并发占满、值得"短等"的真·web 成员(非常驻 web 账号/API)。冷却成员已被 DB WHERE
   // 滤除、不在 notExcludedCandidates 内,天然不计入;常驻由判定排除。
@@ -3094,7 +3102,8 @@ async function selectPoolMember(
       staleRetryCount + 1,
       capacityWaitCount,
       accountPlanFilter,
-      webRequestMode
+      webRequestMode,
+      minPriorityExclusive
     );
   }
 
@@ -3125,7 +3134,8 @@ async function selectPoolMember(
       staleRetryCount,
       capacityWaitCount + 1,
       accountPlanFilter,
-      webRequestMode
+      webRequestMode,
+      minPriorityExclusive
     );
   }
 
@@ -3234,6 +3244,7 @@ function toResolvedPoolConfig(
           billingMultiplier: member.adobeSourced
             ? billingMultiplier * (member.billingMultiplier || 1)
             : billingMultiplier,
+          priority: member.priority,
           reportResult: true,
           inflightLease: true,
           inflightLeaseId: member.leaseId,
@@ -3272,6 +3283,7 @@ function toResolvedPoolConfig(
           // 组倍率 × 本 Adobe 后端倍率（叠加），作用于图像与视频扣费。
           billingMultiplier:
             billingMultiplier * (member.billingMultiplier || 1),
+          priority: member.priority,
           reportResult: true,
           inflightLease: true,
           inflightLeaseId: member.leaseId,
@@ -3326,6 +3338,7 @@ function toResolvedPoolConfig(
         accountBackend: implementationMode,
         billingGroupId: fallbackGroupId,
         billingMultiplier,
+        priority: member.priority,
         reportResult: true,
         inflightLease: true,
         inflightLeaseId: member.leaseId,
@@ -3418,7 +3431,8 @@ async function resolvePoolMember(
     0,
     0,
     options.accountPlanFilter ?? "any",
-    options.webRequestMode ?? "image"
+    options.webRequestMode ?? "image",
+    options.minPriorityExclusive
   );
   if (!member) {
     const fallback = await resolveAnyResponsesMember();
@@ -3490,7 +3504,8 @@ async function resolveAnyWebPoolMember(
         0,
         0,
         options.accountPlanFilter ?? "any",
-        options.webRequestMode ?? "image"
+        options.webRequestMode ?? "image",
+        options.minPriorityExclusive
       );
       if (!member) break;
       if (member.type === "account" && member.implementationMode === "web") {
@@ -3557,7 +3572,8 @@ async function resolveAnyResponsesPoolMember(
       0,
       0,
       options.accountPlanFilter ?? "any",
-      options.webRequestMode ?? "image"
+      options.webRequestMode ?? "image",
+      options.minPriorityExclusive
     );
     if (member) return { group, member };
   }

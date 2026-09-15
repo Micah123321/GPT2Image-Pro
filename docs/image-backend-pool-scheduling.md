@@ -102,6 +102,7 @@ images-only API。(改动前 `requiresResponsesEndpoint` 把阶段与端点焊�
 | **fireflyOnly** | 只剩 adobe + adobe-sourced api,账号与普通 api 全排除 |
 | **命中 adobe 失败** | 重试循环 break(pool-adobe 是终点,不再换号) |
 | **同池排序** | sticky(previous_response_id / session)> preferred > ordinary;ordinary 按 `[priority↑, healthBucket↑]` 分组,组内 LRU(lastAcquired→lastUsed→created) |
+| **同优先级换号预算** | `IMAGE_BACKEND_MAX_ATTEMPTS` 按同一 `priority` 档计数;该档用尽后带 `minPriorityExclusive` 跳到更大 priority 的下一档并重置计数 |
 
 ## 7. 常驻(always_active)与换号的正交性 —— 关键
 

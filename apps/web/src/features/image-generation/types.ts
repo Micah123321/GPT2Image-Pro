@@ -333,6 +333,8 @@ export interface ApiConfig {
     adobeGptImageQuality?: string;
     billingGroupId?: string | null;
     billingMultiplier?: number;
+    // 池成员调度优先级(越小越先)。换号预算按同优先级计数,耗尽后跳到更高数值的下一档。
+    priority?: number;
     reportResult?: boolean;
     inflightLease?: boolean;
     inflightLeaseId?: string | null;

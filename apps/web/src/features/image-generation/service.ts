@@ -1091,6 +1091,13 @@ async function retryPoolBackendResult(
   let candidate = config;
   let lastResult: GenerateImageResult | null = null;
   let attempt = 0;
+  // IMAGE_BACKEND_MAX_ATTEMPTS 按【同一 priority 档】计数；该档换号用尽后跳到
+  // priority 更大的下一档并重置计数，而不是直接把最后一次错误回给用户。
+  let attemptsInPriorityTier = 0;
+  let priorityTier: number | undefined =
+    typeof config.backend.priority === "number"
+      ? config.backend.priority
+      : undefined;
   let unclassifiedErrorSwitches = 0;
   let noImageOutputAttempts = 0;
   const backendAttempts: NonNullable<GenerateImageResult["backendAttempts"]> =
@@ -1160,9 +1167,19 @@ async function retryPoolBackendResult(
 
   while (true) {
     attempt += 1;
+    attemptsInPriorityTier += 1;
     let result: GenerateImageResult;
     const startedAt = Date.now();
     const currentBackend = candidate.backend;
+    if (
+      typeof currentBackend?.priority === "number" &&
+      priorityTier !== currentBackend.priority
+    ) {
+      // 自然选到了新 priority 档(例如上一档已全部 excluded)，重置该档预算。
+      priorityTier = currentBackend.priority;
+      attemptsInPriorityTier = 1;
+      noImageOutputAttempts = 0;
+    }
     const hasPoolBackend =
       currentBackend?.type === "pool-api" ||
       currentBackend?.type === "pool-account" ||
@@ -1233,18 +1250,139 @@ async function retryPoolBackendResult(
     }
     if (unclassifiedRetry) unclassifiedErrorSwitches += 1;
 
-    const retryLimitReason =
-      attempt >= maxAttempts
-        ? "max_attempts"
-        : noImageOutputAttempts >= maxNoImageOutputAttempts
-          ? "max_no_image_output_attempts"
-          : null;
+    const samePriorityBudgetExhausted =
+      attemptsInPriorityTier >= maxAttempts;
+    const noImageBudgetExhausted =
+      noImageOutputAttempts >= maxNoImageOutputAttempts;
+    const retryLimitReason = samePriorityBudgetExhausted
+      ? "max_attempts"
+      : noImageBudgetExhausted
+        ? "max_no_image_output_attempts"
+        : null;
+
+    const memberKey = poolBackendMemberKey(candidate);
+    const resolveNextPoolMember = async (
+      minPriorityExclusive?: number
+    ): Promise<Awaited<ReturnType<typeof resolveImageBackendPoolConfig>>> => {
+      const poolUserId = config.backend?.userId;
+      if (!requestKind || !poolUserId) return null;
+      try {
+        return await resolveImageBackendPoolConfig({
+          userId: poolUserId,
+          apiKeyId: config.backend?.apiKeyId,
+          requestKind,
+          excludedMemberKeys: Array.from(excluded),
+          accountBackendPreference,
+          accountBackendPreferenceMode: options?.accountBackendPreferenceMode,
+          allowAnyResponsesBackend: options?.allowAnyResponsesBackend,
+          spanGroupsForWeb: options?.spanGroupsForWeb,
+          webRequestMode: options?.webRequestMode,
+          forceFirefly: fireflyRequest,
+          ...(typeof minPriorityExclusive === "number"
+            ? { minPriorityExclusive }
+            : {}),
+        });
+      } catch (error) {
+        if (error instanceof ImageBackendPoolUnavailableError) {
+          if (shouldFallbackFromWebPreference()) {
+            return await resolveResponsesFallback(result.error);
+          }
+          logWarn("生图后端没有可切换的账号池成员", {
+            attempt,
+            requestKind,
+            excludedCount: excluded.size,
+            lastError: result.error,
+            minPriorityExclusive,
+          });
+          return null;
+        }
+        throw error;
+      }
+    };
+
     if (retryLimitReason) {
+      // 同优先级换号预算用尽：跳进 priority 更大的下一档，而不是立刻失败。
+      if (memberKey) excluded.add(memberKey);
+      const canAdvancePriority = typeof priorityTier === "number";
+      let nextPriorityMember: Awaited<
+        ReturnType<typeof resolveImageBackendPoolConfig>
+      > = null;
+      if (
+        canAdvancePriority &&
+        requestKind &&
+        config.backend.userId &&
+        currentBackend &&
+        (currentBackend.type === "pool-api" ||
+          currentBackend.type === "pool-account")
+      ) {
+        nextPriorityMember = await resolveNextPoolMember(priorityTier);
+      }
+      const nextPriority = nextPriorityMember?.config?.backend?.priority;
+      if (
+        nextPriorityMember?.config?.backend &&
+        typeof nextPriority === "number" &&
+        typeof priorityTier === "number" &&
+        nextPriority > priorityTier
+      ) {
+        logWarn("同优先级换号预算用尽，进入下一优先级", {
+          attempt,
+          requestKind,
+          previousPriority: priorityTier,
+          nextPriority,
+          retryLimitReason,
+          maxAttempts,
+          noImageOutputAttempts,
+          maxNoImageOutputAttempts,
+          nextBackendType: nextPriorityMember.config.backend.type,
+          nextBackendId: nextPriorityMember.config.backend.id,
+        });
+        if (fireflyRequest && !isAdobeRoutedBackend(nextPriorityMember.config.backend)) {
+          await releaseImageBackendInflightLease({
+            memberType: poolBackendMemberType(
+              nextPriorityMember.config.backend.type
+            ),
+            memberId: nextPriorityMember.config.backend.id,
+            leaseId: nextPriorityMember.config.backend.inflightLeaseId,
+            leasePersisted:
+              nextPriorityMember.config.backend.inflightLeasePersisted,
+          });
+          nextPriorityMember.config.backend.inflightLease = false;
+          return withAttemptDiagnostics(
+            attachStickyBackendMember(candidate, result)
+          );
+        }
+        await recordImageBackendSchedulerSwitch({
+          requestKind,
+          memberType: poolBackendMemberType(
+            nextPriorityMember.config.backend.type
+          ),
+          memberId: nextPriorityMember.config.backend.id,
+          groupId: nextPriorityMember.config.backend.groupId,
+        });
+        candidate = nextPriorityMember.config;
+        priorityTier = nextPriority;
+        attemptsInPriorityTier = 0;
+        noImageOutputAttempts = 0;
+        continue;
+      }
+      if (nextPriorityMember?.config?.backend) {
+        await releaseImageBackendInflightLease({
+          memberType: poolBackendMemberType(
+            nextPriorityMember.config.backend.type
+          ),
+          memberId: nextPriorityMember.config.backend.id,
+          leaseId: nextPriorityMember.config.backend.inflightLeaseId,
+          leasePersisted:
+            nextPriorityMember.config.backend.inflightLeasePersisted,
+        });
+        nextPriorityMember.config.backend.inflightLease = false;
+      }
       logWarn("生图后端重试达到上限，停止切换账号池成员", {
         attempt,
         requestKind,
         backendType: currentBackend?.type,
         backendId: currentBackend?.id,
+        priorityTier,
         error: result.error,
         retryLimitReason,
         maxAttempts,
@@ -1256,7 +1394,6 @@ async function retryPoolBackendResult(
       );
     }
 
-    const memberKey = poolBackendMemberKey(candidate);
     if (memberKey) excluded.add(memberKey);
     if (!requestKind || !config.backend.userId) break;
     const backend = candidate.backend;
@@ -1273,43 +1410,13 @@ async function retryPoolBackendResult(
       backendType: backend.type,
       backendId: backend.id,
       groupId: backend.groupId,
+      priority: backend.priority,
       error: result.error,
       unclassifiedRetry,
       unclassifiedErrorSwitches,
     });
 
-    let next: Awaited<ReturnType<typeof resolveImageBackendPoolConfig>>;
-    try {
-      next = await resolveImageBackendPoolConfig({
-        userId: config.backend.userId,
-        apiKeyId: config.backend.apiKeyId,
-        requestKind,
-        excludedMemberKeys: Array.from(excluded),
-        accountBackendPreference,
-        accountBackendPreferenceMode: options?.accountBackendPreferenceMode,
-        allowAnyResponsesBackend: options?.allowAnyResponsesBackend,
-        spanGroupsForWeb: options?.spanGroupsForWeb,
-        webRequestMode: options?.webRequestMode,
-        forceFirefly: fireflyRequest,
-      });
-    } catch (error) {
-      if (error instanceof ImageBackendPoolUnavailableError) {
-        if (shouldFallbackFromWebPreference()) {
-          next = await resolveResponsesFallback(result.error);
-          if (!next?.config?.backend) break;
-        } else {
-          logWarn("生图后端没有可切换的账号池成员", {
-            attempt,
-            requestKind,
-            excludedCount: excluded.size,
-            lastError: result.error,
-          });
-          break;
-        }
-      } else {
-        throw error;
-      }
-    }
+    let next = await resolveNextPoolMember();
     if (!next?.config?.backend && shouldFallbackFromWebPreference()) {
       next = await resolveResponsesFallback(result.error);
     }

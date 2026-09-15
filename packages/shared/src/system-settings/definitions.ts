@@ -1052,7 +1052,7 @@ export const SYSTEM_SETTING_DEFINITIONS = [
     key: "IMAGE_BACKEND_MAX_ATTEMPTS",
     label: "单次生图后端最大尝试数",
     description:
-      "一次生成请求最多尝试多少个账号/API 后端。达到上限后返回最后一次真实错误，避免遍历大池直至 20 分钟超时。",
+      "同一优先级档内一次生成最多尝试多少个账号/API。该档换号预算用尽后会自动进入更高数值的下一优先级继续尝试；全部档位用尽后返回最后一次真实错误，避免遍历大池直至超时。",
     category: "models",
     valueType: "number",
     min: 1,

@@ -1,5 +1,6 @@
 /** 验证 Web 分组固定图片模型和实际失败回退；隔离数据库、账号池及网络副作用。 */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeSettingNumber } from "@repo/shared/system-settings";
 
 vi.mock("@repo/shared/system-settings", () => ({
   getRuntimeSettingBoolean: vi.fn(async () => false),
@@ -49,6 +50,9 @@ describe("image service Web-first fallback", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    vi.mocked(getRuntimeSettingNumber).mockImplementation(
+      async (_key: string, fallback: number) => fallback
+    );
   });
 
   it("uses Responses for prompt repair when a compatible backend is available", async () => {
@@ -742,7 +746,9 @@ describe("image service Web-first fallback", () => {
     const { generateImage } = await import("./service");
 
     backendPoolMock.resolveImageBackendPoolConfig.mockImplementation(
-      async () => {
+      async (opts?: { minPriorityExclusive?: number }) => {
+        // 同优先级预算用尽后会带着 minPriorityExclusive 再解析；本用例没有更高优先级。
+        if (typeof opts?.minPriorityExclusive === "number") return null;
         const index =
           backendPoolMock.resolveImageBackendPoolConfig.mock.calls.length;
         return {
@@ -757,6 +763,7 @@ describe("image service Web-first fallback", () => {
               userId: "user-1",
               requestKind: "image_generation",
               accountBackend: "web",
+              priority: 50,
               reportResult: true,
             },
           },
@@ -776,6 +783,7 @@ describe("image service Web-first fallback", () => {
           userId: "user-1",
           requestKind: "image_generation",
           accountBackend: "web",
+          priority: 50,
           reportResult: true,
         },
       },
@@ -789,8 +797,117 @@ describe("image service Web-first fallback", () => {
 
     expect(result.error).toBe("terminated");
     expect(result.backendAttempts).toHaveLength(8);
-    expect(backendPoolMock.resolveImageBackendPoolConfig).toHaveBeenCalledTimes(
-      7
+    expect(
+      backendPoolMock.resolveImageBackendPoolConfig
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ minPriorityExclusive: 50 })
     );
+  });
+
+  it("同优先级换号预算用尽后进入下一优先级 API", async () => {
+    process.env.DATABASE_URL ||= "postgresql://test:test@127.0.0.1:5432/test";
+    const { getRuntimeSettingNumber } = await import(
+      "@repo/shared/system-settings"
+    );
+    vi.mocked(getRuntimeSettingNumber).mockImplementation(
+      async (key: string, fallback: number) =>
+        key === "IMAGE_BACKEND_MAX_ATTEMPTS" ? 2 : fallback
+    );
+    const { generateImage } = await import("./service");
+    const imageBase64 = Buffer.from("next-priority-api").toString("base64");
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({ data: [{ b64_json: imageBase64 }] }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    backendPoolMock.resolveImageBackendPoolConfig.mockImplementation(
+      async (opts?: { minPriorityExclusive?: number }) => {
+        if (opts?.minPriorityExclusive === 50) {
+          return {
+            config: {
+              baseUrl: "https://api.example.test/v1",
+              apiKey: "api-key",
+              backend: {
+                type: "pool-api",
+                id: "api-55",
+                groupId: "group-web",
+                groupBackendType: "web",
+                userId: "user-1",
+                requestKind: "image_generation",
+                priority: 55,
+                reportResult: true,
+              },
+            },
+          };
+        }
+        const index =
+          backendPoolMock.resolveImageBackendPoolConfig.mock.calls.length;
+        return {
+          config: {
+            baseUrl: "https://chatgpt.com",
+            apiKey: `web-key-${index + 1}`,
+            backend: {
+              type: "pool-account",
+              id: `web-${index + 1}`,
+              groupId: "group-web",
+              groupBackendType: "web",
+              userId: "user-1",
+              requestKind: "image_generation",
+              accountBackend: "web",
+              priority: 50,
+              reportResult: true,
+            },
+          },
+        };
+      }
+    );
+
+    const result = await generateImage(
+      {
+        baseUrl: "https://chatgpt.com",
+        apiKey: "web-key-1",
+        backend: {
+          type: "pool-account",
+          id: "web-1",
+          groupId: "group-web",
+          groupBackendType: "web",
+          userId: "user-1",
+          requestKind: "image_generation",
+          accountBackend: "web",
+          priority: 50,
+          reportResult: true,
+        },
+      },
+      {
+        prompt: "make an icon",
+        model: "gpt-image-2.5",
+        size: "1024x1024",
+        forceWebBackend: true,
+      }
+    );
+
+    expect(result.imageBase64).toBe(imageBase64);
+    expect(result.error).toBeUndefined();
+    expect(
+      backendPoolMock.resolveImageBackendPoolConfig
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ minPriorityExclusive: 50 })
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/v1/images/generations",
+      expect.anything()
+    );
+    // 2 次 priority 50 web + 1 次 priority 55 api
+    expect(result.backendAttempts).toHaveLength(3);
+    expect(result.backendAttempts?.[2]).toMatchObject({
+      backendType: "pool-api",
+      backendId: "api-55",
+    });
   });
 });
