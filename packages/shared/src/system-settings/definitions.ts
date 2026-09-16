@@ -1063,7 +1063,7 @@ export const SYSTEM_SETTING_DEFINITIONS = [
     key: "IMAGE_BACKEND_MAX_NO_IMAGE_OUTPUT_ATTEMPTS",
     label: "无图输出最大尝试数",
     description:
-      "同一次生成出现 no image output/no image data 时最多尝试的后端数量。此类失败通常与请求或上游任务相关，继续遍历账号收益很低。",
+      "同一次生成出现 no image output/no image data 时最多尝试的后端数量，按整次请求累计、不随优先级换档清零。此类失败通常与请求或上游任务相关，触顶后不再进入下一优先级。",
     category: "models",
     valueType: "number",
     min: 1,

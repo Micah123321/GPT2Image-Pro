@@ -1092,12 +1092,14 @@ async function retryPoolBackendResult(
   let lastResult: GenerateImageResult | null = null;
   let attempt = 0;
   // IMAGE_BACKEND_MAX_ATTEMPTS 按【同一 priority 档】计数；该档换号用尽后跳到
-  // priority 更大的下一档并重置计数，而不是直接把最后一次错误回给用户。
+  // priority 更大的下一档并重置该档计数。minPriorityFloor 钉住已用尽档，后续选号
+  // 不得再回到更优(更小) priority。无图次数按整次请求累计，不随换档清零。
   let attemptsInPriorityTier = 0;
   let priorityTier: number | undefined =
     typeof config.backend.priority === "number"
       ? config.backend.priority
       : undefined;
+  let minPriorityFloor: number | undefined;
   let unclassifiedErrorSwitches = 0;
   let noImageOutputAttempts = 0;
   const backendAttempts: NonNullable<GenerateImageResult["backendAttempts"]> =
@@ -1164,6 +1166,19 @@ async function retryPoolBackendResult(
       throw fallbackError;
     }
   };
+  const releaseResolvedLease = async (
+    resolved: Awaited<ReturnType<typeof resolveImageBackendPoolConfig>>
+  ) => {
+    const backend = resolved?.config?.backend;
+    if (!backend) return;
+    await releaseImageBackendInflightLease({
+      memberType: poolBackendMemberType(backend.type),
+      memberId: backend.id,
+      leaseId: backend.inflightLeaseId,
+      leasePersisted: backend.inflightLeasePersisted,
+    });
+    backend.inflightLease = false;
+  };
 
   while (true) {
     attempt += 1;
@@ -1173,12 +1188,13 @@ async function retryPoolBackendResult(
     const currentBackend = candidate.backend;
     if (
       typeof currentBackend?.priority === "number" &&
-      priorityTier !== currentBackend.priority
+      currentBackend.priority !== priorityTier &&
+      (typeof priorityTier !== "number" ||
+        currentBackend.priority > priorityTier)
     ) {
-      // 自然选到了新 priority 档(例如上一档已全部 excluded)，重置该档预算。
+      // 只在前进到更差(更大)档时重置该档换号预算。无图计数整次请求共享。
       priorityTier = currentBackend.priority;
       attemptsInPriorityTier = 1;
-      noImageOutputAttempts = 0;
     }
     const hasPoolBackend =
       currentBackend?.type === "pool-api" ||
@@ -1254,11 +1270,6 @@ async function retryPoolBackendResult(
       attemptsInPriorityTier >= maxAttempts;
     const noImageBudgetExhausted =
       noImageOutputAttempts >= maxNoImageOutputAttempts;
-    const retryLimitReason = samePriorityBudgetExhausted
-      ? "max_attempts"
-      : noImageBudgetExhausted
-        ? "max_no_image_output_attempts"
-        : null;
 
     const memberKey = poolBackendMemberKey(candidate);
     const resolveNextPoolMember = async (
@@ -1284,9 +1295,6 @@ async function retryPoolBackendResult(
         });
       } catch (error) {
         if (error instanceof ImageBackendPoolUnavailableError) {
-          if (shouldFallbackFromWebPreference()) {
-            return await resolveResponsesFallback(result.error);
-          }
           logWarn("生图后端没有可切换的账号池成员", {
             attempt,
             requestKind,
@@ -1300,8 +1308,25 @@ async function retryPoolBackendResult(
       }
     };
 
-    if (retryLimitReason) {
-      // 同优先级换号预算用尽：跳进 priority 更大的下一档，而不是立刻失败。
+    if (noImageBudgetExhausted) {
+      if (memberKey) excluded.add(memberKey);
+      logWarn("生图后端无图输出达到上限，停止切换账号池成员", {
+        attempt,
+        requestKind,
+        backendType: currentBackend?.type,
+        backendId: currentBackend?.id,
+        priorityTier,
+        error: result.error,
+        noImageOutputAttempts,
+        maxNoImageOutputAttempts,
+      });
+      return withAttemptDiagnostics(
+        attachStickyBackendMember(candidate, result)
+      );
+    }
+
+    if (samePriorityBudgetExhausted) {
+      // 同优先级换号预算用尽：跳进 priority 更大的下一档，并钉住 floor。
       if (memberKey) excluded.add(memberKey);
       const canAdvancePriority = typeof priorityTier === "number";
       let nextPriorityMember: Awaited<
@@ -1329,7 +1354,6 @@ async function retryPoolBackendResult(
           requestKind,
           previousPriority: priorityTier,
           nextPriority,
-          retryLimitReason,
           maxAttempts,
           noImageOutputAttempts,
           maxNoImageOutputAttempts,
@@ -1337,16 +1361,7 @@ async function retryPoolBackendResult(
           nextBackendId: nextPriorityMember.config.backend.id,
         });
         if (fireflyRequest && !isAdobeRoutedBackend(nextPriorityMember.config.backend)) {
-          await releaseImageBackendInflightLease({
-            memberType: poolBackendMemberType(
-              nextPriorityMember.config.backend.type
-            ),
-            memberId: nextPriorityMember.config.backend.id,
-            leaseId: nextPriorityMember.config.backend.inflightLeaseId,
-            leasePersisted:
-              nextPriorityMember.config.backend.inflightLeasePersisted,
-          });
-          nextPriorityMember.config.backend.inflightLease = false;
+          await releaseResolvedLease(nextPriorityMember);
           return withAttemptDiagnostics(
             attachStickyBackendMember(candidate, result)
           );
@@ -1359,23 +1374,53 @@ async function retryPoolBackendResult(
           memberId: nextPriorityMember.config.backend.id,
           groupId: nextPriorityMember.config.backend.groupId,
         });
+        minPriorityFloor = priorityTier;
         candidate = nextPriorityMember.config;
         priorityTier = nextPriority;
         attemptsInPriorityTier = 0;
-        noImageOutputAttempts = 0;
         continue;
       }
       if (nextPriorityMember?.config?.backend) {
-        await releaseImageBackendInflightLease({
-          memberType: poolBackendMemberType(
-            nextPriorityMember.config.backend.type
-          ),
-          memberId: nextPriorityMember.config.backend.id,
-          leaseId: nextPriorityMember.config.backend.inflightLeaseId,
-          leasePersisted:
-            nextPriorityMember.config.backend.inflightLeasePersisted,
-        });
-        nextPriorityMember.config.backend.inflightLease = false;
+        await releaseResolvedLease(nextPriorityMember);
+      }
+      if (shouldFallbackFromWebPreference()) {
+        const codexFallback = await resolveResponsesFallback(result.error);
+        if (codexFallback?.config?.backend) {
+          if (
+            fireflyRequest &&
+            !isAdobeRoutedBackend(codexFallback.config.backend)
+          ) {
+            await releaseResolvedLease(codexFallback);
+            return withAttemptDiagnostics(
+              attachStickyBackendMember(candidate, result)
+            );
+          }
+          logWarn("同优先级换号预算用尽，混合分组回退 Codex", {
+            attempt,
+            requestKind,
+            previousPriority: priorityTier,
+            nextBackendType: codexFallback.config.backend.type,
+            nextBackendId: codexFallback.config.backend.id,
+            nextPriority: codexFallback.config.backend.priority,
+          });
+          await recordImageBackendSchedulerSwitch({
+            requestKind,
+            memberType: poolBackendMemberType(
+              codexFallback.config.backend.type
+            ),
+            memberId: codexFallback.config.backend.id,
+            groupId: codexFallback.config.backend.groupId,
+          });
+          if (typeof priorityTier === "number") {
+            minPriorityFloor = priorityTier;
+          }
+          candidate = codexFallback.config;
+          if (typeof codexFallback.config.backend.priority === "number") {
+            priorityTier = codexFallback.config.backend.priority;
+          }
+          attemptsInPriorityTier = 0;
+          continue;
+        }
       }
       logWarn("生图后端重试达到上限，停止切换账号池成员", {
         attempt,
@@ -1384,7 +1429,7 @@ async function retryPoolBackendResult(
         backendId: currentBackend?.id,
         priorityTier,
         error: result.error,
-        retryLimitReason,
+        retryLimitReason: "max_attempts",
         maxAttempts,
         noImageOutputAttempts,
         maxNoImageOutputAttempts,
@@ -1416,7 +1461,7 @@ async function retryPoolBackendResult(
       unclassifiedErrorSwitches,
     });
 
-    let next = await resolveNextPoolMember();
+    let next = await resolveNextPoolMember(minPriorityFloor);
     if (!next?.config?.backend && shouldFallbackFromWebPreference()) {
       next = await resolveResponsesFallback(result.error);
     }
