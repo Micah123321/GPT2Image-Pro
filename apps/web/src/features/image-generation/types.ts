@@ -296,6 +296,13 @@ export interface ApiConfig {
   apiKey: string;
   signal?: AbortSignal;
   model?: string;
+  /** 本站型号 → 上游型号；派发前改写出站 model/quality。 */
+  modelMapping?: Array<{
+    from: string;
+    to: string;
+    whenQuality?: string;
+    setQuality?: string;
+  }>;
   useStream?: boolean;
   contentSafetyEnabled?: boolean;
   headers?: Record<string, string>;

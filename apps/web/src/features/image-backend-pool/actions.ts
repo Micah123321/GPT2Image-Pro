@@ -592,6 +592,21 @@ export const saveImageBackendApiAction = withImageBackendPoolAdminAction(
       baseUrl: z.string().trim().url(),
       apiKey: z.string().trim().optional(),
       model: z.string().trim().max(120).optional(),
+      modelMapping: z
+        .array(
+          z.object({
+            from: z.string().trim().min(1).max(120),
+            to: z.string().trim().min(1).max(120),
+            whenQuality: z
+              .enum(["high", "medium", "low", "auto", "xhigh", "max"])
+              .optional(),
+            setQuality: z
+              .enum(["high", "medium", "low", "auto", "xhigh", "max"])
+              .optional(),
+          })
+        )
+        .max(50)
+        .optional(),
       interfaceMode: apiInterfaceModeSchema.default("mixed"),
       chatCompletionsUpstreamMode:
         chatCompletionsUpstreamModeSchema.default("responses"),
@@ -619,6 +634,7 @@ export const saveImageBackendApiAction = withImageBackendPoolAdminAction(
       baseUrl: parsedInput.baseUrl,
       apiKey: parsedInput.apiKey || undefined,
       model: parsedInput.model || null,
+      modelMapping: parsedInput.modelMapping || null,
       interfaceMode: parsedInput.interfaceMode,
       chatCompletionsUpstreamMode: parsedInput.chatCompletionsUpstreamMode,
       imagesUpstreamMode: parsedInput.imagesUpstreamMode,

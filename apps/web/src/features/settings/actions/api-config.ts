@@ -97,6 +97,17 @@ const optionalTrimmedString = z.preprocess((value) => {
   return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().optional());
 
+const apiModelMappingEntrySchema = z.object({
+  from: z.string().trim().min(1).max(120),
+  to: z.string().trim().min(1).max(120),
+  whenQuality: z
+    .enum(["high", "medium", "low", "auto", "xhigh", "max"])
+    .optional(),
+  setQuality: z
+    .enum(["high", "medium", "low", "auto", "xhigh", "max"])
+    .optional(),
+});
+
 const apiConfigSchema = z.object({
   baseUrl: z
     .string()
@@ -105,6 +116,7 @@ const apiConfigSchema = z.object({
     .refine((url) => !isPrivateUrl(url), "Use a public HTTPS API base URL"),
   apiKey: z.string().trim().min(1, "API key is required"),
   model: optionalTrimmedString,
+  modelMapping: z.array(apiModelMappingEntrySchema).max(50).optional(),
   useStream: z.boolean().optional(),
   chatCompletionsUpstreamMode: z
     .enum(["responses", "chat_completions", "images"])
@@ -150,6 +162,9 @@ export const saveApiConfig = withApiConfigAction("save")
           baseUrl: parsedInput.baseUrl,
           apiKey: parsedInput.apiKey,
           model: parsedInput.model || null,
+          modelMapping: parsedInput.modelMapping?.length
+            ? parsedInput.modelMapping
+            : null,
           useStream: parsedInput.useStream ?? false,
           chatCompletionsUpstreamMode: parsedInput.chatCompletionsUpstreamMode,
           isActive: true,
@@ -163,6 +178,9 @@ export const saveApiConfig = withApiConfigAction("save")
         baseUrl: parsedInput.baseUrl,
         apiKey: parsedInput.apiKey,
         model: parsedInput.model || null,
+        modelMapping: parsedInput.modelMapping?.length
+          ? parsedInput.modelMapping
+          : null,
         useStream: parsedInput.useStream ?? false,
         chatCompletionsUpstreamMode: parsedInput.chatCompletionsUpstreamMode,
         isActive: true,
@@ -204,6 +222,7 @@ const apiTestSchema = z.object({
     .refine((url) => !isPrivateUrl(url), "Use a public HTTPS API base URL"),
   apiKey: z.string().trim().min(1, "API key is required"),
   model: optionalTrimmedString,
+  modelMapping: z.array(apiModelMappingEntrySchema).max(50).optional(),
 });
 
 /**
@@ -224,6 +243,7 @@ export const testApiConfig = withApiConfigAction("test")
       baseUrl: parsedInput.baseUrl,
       apiKey: parsedInput.apiKey,
       model: parsedInput.model ?? null,
+      modelMapping: parsedInput.modelMapping,
       backendType: "user-api",
     });
   });

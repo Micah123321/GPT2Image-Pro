@@ -22,6 +22,7 @@
 
 ## 功能
 
+- [2026-09-16 API 模型映射](memory/2026-09-16-api-model-mapping.md) — 后台/用户 API 可配本站型号→上游 id（含 quality 分档）；g-aisc.xyz Adobe/Gemini 渠道预设；Gemini 勿走 `/v1/images/*`。
 - **2026-09-10 审核提示词修剪 Web 回退**：修剪后端按全局 Responses 优先，初始无可用成员或运行时重试耗尽后再跨组选择真 Web 账号；Web 用 GPT-5.5 低思考纯文本 Work 会话，不受 `image_gen` 额度限制，成功不改图片额度/冷却，确定性轮询错误立即换号；修剪结果仍回到原本地审核循环。
 - [2026-09-10 Web 请求协议校准](memory/2026-09-10-web-request-envelope.md) — 按 HAR 对齐会话信封和主模型映射；Sentinel 改为 prepare/finalize、25 项 PoW 与 Turnstile VM；Web 2.5 仍通过 `picture_v2`，不发送图片版本字段。
 - [2026-09-09 Web 分组固定模型](memory/2026-09-09-web-group-model.md) — 用户明确纯 Web 主组任意图片型号均按 2.5；选路前清除 Firefly 意图并排除 Adobe 来源，出站/倍率/记录/UI 同步；文本模型权限独立。

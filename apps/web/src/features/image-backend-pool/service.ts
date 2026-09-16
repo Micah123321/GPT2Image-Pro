@@ -48,6 +48,7 @@ import {
 } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { Pool } from "pg";
+import { parseApiModelMapping } from "@/features/image-generation/api-model-mapping";
 
 import {
   type ChatGptWebAccountInfo,
@@ -189,6 +190,12 @@ type PoolMember =
       baseUrl: string;
       apiKey: string;
       model: string | null;
+      modelMapping?: Array<{
+        from: string;
+        to: string;
+        whenQuality?: string;
+        setQuality?: string;
+      }> | null;
       interfaceMode: ImageBackendApiInterfaceMode;
       chatCompletionsUpstreamMode: ChatCompletionsUpstreamMode;
       imagesUpstreamMode: ImagesUpstreamMode;
@@ -2599,6 +2606,7 @@ async function selectPoolMember(
           baseUrl: imageBackendApi.baseUrl,
           apiKey: imageBackendApi.apiKey,
           model: imageBackendApi.model,
+          modelMapping: imageBackendApi.modelMapping,
           interfaceMode: imageBackendApi.interfaceMode,
           chatCompletionsUpstreamMode:
             imageBackendApi.chatCompletionsUpstreamMode,
@@ -2637,6 +2645,7 @@ async function selectPoolMember(
           baseUrl: imageBackendApi.baseUrl,
           apiKey: imageBackendApi.apiKey,
           model: imageBackendApi.model,
+          modelMapping: imageBackendApi.modelMapping,
           interfaceMode: imageBackendApi.interfaceMode,
           chatCompletionsUpstreamMode:
             imageBackendApi.chatCompletionsUpstreamMode,
@@ -2798,6 +2807,7 @@ async function selectPoolMember(
         baseUrl: row.baseUrl,
         apiKey: row.apiKey,
         model: row.model,
+        modelMapping: row.modelMapping,
         interfaceMode: normalizeImageBackendApiInterfaceMode(row.interfaceMode),
         chatCompletionsUpstreamMode: normalizeChatCompletionsUpstreamMode(
           row.chatCompletionsUpstreamMode
@@ -3222,6 +3232,7 @@ function toResolvedPoolConfig(
         baseUrl: stripTrailingSlash(member.baseUrl),
         apiKey: member.apiKey,
         model: member.model || undefined,
+        modelMapping: parseApiModelMapping(member.modelMapping),
         useStream: member.useStream,
         contentSafetyEnabled,
         backend: {
@@ -7344,6 +7355,12 @@ type UpsertApiInput = {
   baseUrl: string;
   apiKey?: string;
   model?: string | null;
+  modelMapping?: Array<{
+    from: string;
+    to: string;
+    whenQuality?: string;
+    setQuality?: string;
+  }> | null;
   interfaceMode?: ImageBackendApiInterfaceMode;
   chatCompletionsUpstreamMode?: ChatCompletionsUpstreamMode;
   imagesUpstreamMode?: ImagesUpstreamMode;
@@ -7407,6 +7424,7 @@ export async function upsertImageBackendApi(input: UpsertApiInput) {
     name: input.name,
     baseUrl: stripTrailingSlash(input.baseUrl),
     model: input.model || null,
+    modelMapping: input.modelMapping?.length ? input.modelMapping : null,
     interfaceMode: normalizeImageBackendApiInterfaceMode(input.interfaceMode),
     chatCompletionsUpstreamMode: normalizeChatCompletionsUpstreamMode(
       input.chatCompletionsUpstreamMode
@@ -7751,6 +7769,7 @@ export async function probeImageBackendApi(id: string): Promise<{
       baseUrl: imageBackendApi.baseUrl,
       apiKey: imageBackendApi.apiKey,
       model: imageBackendApi.model,
+      modelMapping: imageBackendApi.modelMapping,
       useStream: imageBackendApi.useStream,
       interfaceMode: imageBackendApi.interfaceMode,
       imageUpstreamMode: imageBackendApi.imageUpstreamMode,
@@ -7769,6 +7788,7 @@ export async function probeImageBackendApi(id: string): Promise<{
     baseUrl: api.baseUrl,
     apiKey: api.apiKey,
     model: api.model,
+    modelMapping: parseApiModelMapping(api.modelMapping),
     useStream: api.useStream,
     apiInterfaceMode: normalizeImageBackendApiInterfaceMode(api.interfaceMode),
     imagesUpstreamMode: normalizeImagesUpstreamMode(api.imageUpstreamMode),
@@ -8168,6 +8188,7 @@ export async function listAdminImageBackendPool() {
       name: imageBackendApi.name,
       baseUrl: imageBackendApi.baseUrl,
       model: imageBackendApi.model,
+      modelMapping: imageBackendApi.modelMapping,
       interfaceMode: imageBackendApi.interfaceMode,
       chatCompletionsUpstreamMode: imageBackendApi.chatCompletionsUpstreamMode,
       imagesUpstreamMode: imageBackendApi.imageUpstreamMode,

@@ -12,12 +12,14 @@ import {
   buildOpenAIPromptCacheKey,
   buildPromptCacheSalt,
 } from "./openai-prompt-cache";
+import { applyApiModelMapping } from "./api-model-mapping";
 import {
   AUTO_IMAGE_SIZE,
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_SIZE,
   getImageModel,
   getUpstreamImageModel,
+  isImageModel,
 } from "./resolution";
 import {
   resolvePromptImageReferences,
@@ -140,10 +142,19 @@ function getResponsesModel(config: ApiConfig, model?: string) {
   return GPT55_CHAT_MODEL;
 }
 
-function getToolModel(config: ApiConfig, model?: string) {
-  return getUpstreamImageModel(
+function getToolModel(config: ApiConfig, model?: string, quality?: string) {
+  const requested = model?.trim();
+  // 映射后的上游 id（如 gpt-image-2-ad / gemini-*-ad）不再走站内目录，避免被打回 2.5。
+  if (requested && !isImageModel(requested)) return requested;
+  const resolved = getUpstreamImageModel(
     getImageModel(model, config.model) || DEFAULT_IMAGE_MODEL
   );
+  return applyApiModelMapping({
+    requestedModel: model,
+    resolvedModel: resolved,
+    quality,
+    mapping: config.modelMapping,
+  }).model;
 }
 
 function getPrompt(params: GenerateImageParams | EditImageParams) {
@@ -228,12 +239,18 @@ export function buildResponsesImageGenerationRequest(
   const tool: ResponsesImageRequest["tools"][number] = {
     type: "image_generation",
     action: "generate",
-    model: getToolModel(config, params.model),
+    model: getToolModel(config, params.model, params.quality),
     partial_images: 2,
   };
 
   if (size && size !== AUTO_IMAGE_SIZE) tool.size = size;
-  const quality = normalizeQuality(params.quality);
+  const mappedQuality = applyApiModelMapping({
+    requestedModel: params.model,
+    resolvedModel: tool.model,
+    quality: params.quality,
+    mapping: config.modelMapping,
+  }).quality;
+  const quality = normalizeQuality(mappedQuality || params.quality);
   if (quality) tool.quality = quality;
   const moderation = normalizeModeration(params.moderation);
   if (moderation) tool.moderation = moderation;
@@ -300,7 +317,7 @@ export function buildResponsesImageEditRequest(
   const tool: ResponsesImageRequest["tools"][number] = {
     type: "image_generation",
     action: "edit",
-    model: getToolModel(config, params.model),
+    model: getToolModel(config, params.model, params.quality),
     partial_images: 2,
   };
 

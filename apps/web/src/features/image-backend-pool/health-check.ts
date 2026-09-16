@@ -48,6 +48,7 @@ export interface ImageApiHealthCheckInput {
   baseUrl: string;
   apiKey: string;
   model?: string | null;
+  modelMapping?: ApiConfig["modelMapping"];
   useStream?: boolean;
   apiInterfaceMode?: ImageBackendApiInterfaceMode;
   imagesUpstreamMode?: ImagesUpstreamMode;
@@ -171,6 +172,7 @@ export async function checkImageBackendApiHealth(
     baseUrl: input.baseUrl,
     apiKey: input.apiKey,
     model: input.model || undefined,
+    modelMapping: input.modelMapping,
     useStream: input.useStream ?? false,
     backend: {
       type: input.backendType ?? "pool-api",

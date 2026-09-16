@@ -809,6 +809,15 @@ export const userApiConfig = pgTable("user_api_config", {
   baseUrl: text("base_url").notNull(),
   apiKey: text("api_key").notNull(),
   model: text("model"),
+  // 本站型号 → 上游型号（可按 quality 分档）。空=不改写，仍用请求型号或上方 model 缺省。
+  modelMapping: json("model_mapping").$type<
+    Array<{
+      from: string;
+      to: string;
+      whenQuality?: string;
+      setQuality?: string;
+    }>
+  >(),
   useStream: boolean("use_stream").notNull().default(false),
   chatCompletionsUpstreamMode: text("chat_completions_upstream_mode")
     .notNull()
@@ -910,6 +919,15 @@ export const imageBackendApi = pgTable("image_backend_api", {
   baseUrl: text("base_url").notNull(),
   apiKey: text("api_key").notNull(),
   model: text("model"),
+  // 本站型号 → 上游型号（可按 quality 分档）。空=不改写。
+  modelMapping: json("model_mapping").$type<
+    Array<{
+      from: string;
+      to: string;
+      whenQuality?: string;
+      setQuality?: string;
+    }>
+  >(),
   interfaceMode: text("interface_mode").notNull().default("images"),
   useStream: boolean("use_stream").notNull().default(false),
   chatCompletionsUpstreamMode: text("chat_completions_upstream_mode")

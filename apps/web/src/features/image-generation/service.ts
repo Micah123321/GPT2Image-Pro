@@ -45,6 +45,10 @@ import {
   reverseFireflyToGptRequest,
 } from "./adobe-sourced-firefly";
 import {
+  applyApiModelMapping,
+  parseApiModelMapping,
+} from "./api-model-mapping";
+import {
   AGENT_CONTINUE_INSTRUCTIONS,
   createDefaultAgentAdditionalTools,
   DEFAULT_AGENT_IMAGE_ROUNDS,
@@ -235,6 +239,36 @@ function getModel(config: ApiConfig, model?: string) {
     );
   }
   return getUpstreamImageModel(imageModel);
+}
+
+/**
+ * 出站图片型号：Adobe 来源反向转换 → 站内别名 → 该 API 的映射表。
+ * 映射可按 quality 改写上游 id（如 gpt-image-2.5 + high → gpt-image-2-high）。
+ */
+function resolveOutgoingImageRequest(
+  config: ApiConfig,
+  requestedModel: string | null | undefined,
+  requestedSize: string | null | undefined,
+  quality?: string | null
+): { model: string; size: string | undefined; quality: string | undefined } {
+  const fireflyRewrite = reverseAdobeSourcedApiFirefly(
+    config,
+    requestedModel,
+    requestedSize
+  );
+  const resolvedModel =
+    fireflyRewrite?.model ?? getModel(config, requestedModel ?? undefined);
+  const mapped = applyApiModelMapping({
+    requestedModel,
+    resolvedModel,
+    quality,
+    mapping: config.modelMapping,
+  });
+  return {
+    model: mapped.model,
+    size: fireflyRewrite?.size ?? requestedSize ?? undefined,
+    quality: mapped.quality,
+  };
 }
 
 function getHeaders(
@@ -2601,22 +2635,29 @@ function appendImageParams(
     background?: string;
   }
 ) {
-  formData.append("model", getModel(config, params.model));
+  const outgoing = resolveOutgoingImageRequest(
+    config,
+    params.model,
+    params.size,
+    params.quality
+  );
+  formData.append("model", outgoing.model);
   // multipart 改图同样注入每请求唯一零宽 nonce 破上游内容缓存（仅上游请求体）。
   formData.append("prompt", appendImagesUpstreamNonce(params.prompt));
   formData.append("n", String(params.n || 1));
   formData.append("response_format", "b64_json");
 
-  if (params.size) {
-    formData.append("size", params.size);
-    const dimensions = parseImageSize(params.size);
+  const outgoingSize = outgoing.size || params.size;
+  if (outgoingSize) {
+    formData.append("size", outgoingSize);
+    const dimensions = parseImageSize(outgoingSize);
     if (dimensions) {
       formData.append("width", String(dimensions.width));
       formData.append("height", String(dimensions.height));
     }
   }
 
-  const quality = normalizeQuality(params.quality);
+  const quality = normalizeQuality(outgoing.quality || params.quality);
   if (quality) {
     formData.append("quality", quality);
   }
@@ -4246,6 +4287,8 @@ export async function getUserApiConfig(
   const result: ApiConfig = { baseUrl: row.baseUrl, apiKey: row.apiKey };
   const normalizedModel = normalizeImageModel(row.model);
   if (normalizedModel) result.model = normalizedModel;
+  const modelMapping = parseApiModelMapping(row.modelMapping);
+  if (modelMapping.length > 0) result.modelMapping = modelMapping;
   if (row.useStream) result.useStream = true;
   result.contentSafetyEnabled = true;
   result.backend = {
@@ -4523,16 +4566,20 @@ export async function generateImage(
     );
   }
 
-  const fireflyRewrite = reverseAdobeSourcedApiFirefly(
+  const outgoing = resolveOutgoingImageRequest(
     config,
     params.model,
-    params.size
+    params.size,
+    params.quality
   );
-  if (fireflyRewrite) {
+  if (outgoing.size && outgoing.size !== params.size) {
     // 反向转换后 size 改写一次，下游所有 params.size 读取（含 appendImageParams）即一致。
-    params = { ...params, size: fireflyRewrite.size };
+    params = { ...params, size: outgoing.size };
   }
-  const model = fireflyRewrite?.model ?? getModel(config, params.model);
+  if (outgoing.quality && outgoing.quality !== params.quality) {
+    params = { ...params, quality: outgoing.quality as typeof params.quality };
+  }
+  const model = outgoing.model;
   if (isPoolAccountBackend(config, "web")) {
     return requireImageOutput(
       await generateImageWithChatGptWeb(config, {
@@ -4694,16 +4741,20 @@ export async function editImage(
     params.signal
   );
 
-  const fireflyRewrite = reverseAdobeSourcedApiFirefly(
+  const outgoing = resolveOutgoingImageRequest(
     config,
     params.model,
-    params.size
+    params.size,
+    params.quality
   );
-  if (fireflyRewrite) {
+  if (outgoing.size && outgoing.size !== params.size) {
     // 反向转换后 size 改写一次，下游所有 params.size 读取（含 appendImageParams）即一致。
-    params = { ...params, size: fireflyRewrite.size };
+    params = { ...params, size: outgoing.size };
   }
-  const model = fireflyRewrite?.model ?? getModel(config, params.model);
+  if (outgoing.quality && outgoing.quality !== params.quality) {
+    params = { ...params, quality: outgoing.quality as typeof params.quality };
+  }
+  const model = outgoing.model;
   const editPromptRefs = resolvePromptImageReferences({
     prompt: getEffectivePrompt(params),
     images: params.images,

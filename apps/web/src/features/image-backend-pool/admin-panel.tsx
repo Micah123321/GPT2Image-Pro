@@ -69,6 +69,11 @@ import {
 } from "react";
 import { toast } from "sonner";
 
+import { parseApiModelMapping } from "@/features/image-generation/api-model-mapping";
+import {
+  ApiModelMappingEditor,
+  compactApiModelMapping,
+} from "./api-model-mapping-editor";
 import {
   bulkDeleteImageBackendAccountsAction,
   bulkUpdateImageBackendAccountsAction,
@@ -179,6 +184,12 @@ type Api = {
   name: string;
   baseUrl: string;
   model: string | null;
+  modelMapping?: Array<{
+    from: string;
+    to: string;
+    whenQuality?: string;
+    setQuality?: string;
+  }> | null;
   interfaceMode: ImageBackendApiInterfaceMode;
   chatCompletionsUpstreamMode: ChatCompletionsUpstreamModeFormValue;
   imagesUpstreamMode: ImagesUpstreamModeFormValue;
@@ -828,6 +839,7 @@ export function ImageBackendPoolAdminPanel({
     baseUrl: "",
     apiKey: "",
     model: "",
+    modelMapping: [] as ReturnType<typeof parseApiModelMapping>,
     interfaceMode: "mixed" as ApiInterfaceModeFormValue,
     chatCompletionsUpstreamMode:
       "responses" as ChatCompletionsUpstreamModeFormValue,
@@ -1106,6 +1118,7 @@ export function ImageBackendPoolAdminPanel({
       baseUrl: "",
       apiKey: "",
       model: "",
+      modelMapping: [],
       interfaceMode: "mixed" as ApiInterfaceModeFormValue,
       chatCompletionsUpstreamMode:
         "responses" as ChatCompletionsUpstreamModeFormValue,
@@ -1259,6 +1272,7 @@ export function ImageBackendPoolAdminPanel({
       baseUrl: api.baseUrl,
       apiKey: "",
       model: api.model || "",
+      modelMapping: parseApiModelMapping(api.modelMapping),
       interfaceMode: api.interfaceMode || "images",
       chatCompletionsUpstreamMode:
         api.chatCompletionsUpstreamMode || "responses",
@@ -3788,6 +3802,12 @@ export function ImageBackendPoolAdminPanel({
                     }))
                   }
                 />
+                <ApiModelMappingEditor
+                  value={apiForm.modelMapping}
+                  onChange={(modelMapping) =>
+                    setApiForm((current) => ({ ...current, modelMapping }))
+                  }
+                />
                 <div className="space-y-2">
                   <Label>接口类型</Label>
                   <Select
@@ -4066,6 +4086,9 @@ export function ImageBackendPoolAdminPanel({
                       ...apiForm,
                       groupId: apiForm.groupIds[0] || "default",
                       groupIds: apiForm.groupIds,
+                      modelMapping: compactApiModelMapping(
+                        apiForm.modelMapping
+                      ),
                     })
                   }
                   disabled={

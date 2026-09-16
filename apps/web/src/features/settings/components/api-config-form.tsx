@@ -27,6 +27,11 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import {
+  ApiModelMappingEditor,
+  compactApiModelMapping,
+} from "@/features/image-backend-pool/api-model-mapping-editor";
+import { parseApiModelMapping } from "@/features/image-generation/api-model-mapping";
+import {
   deleteApiConfig,
   getApiConfig,
   saveApiConfig,
@@ -65,6 +70,9 @@ export function ApiConfigForm() {
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
+  const [modelMapping, setModelMapping] = useState(
+    [] as ReturnType<typeof parseApiModelMapping>
+  );
   const [useStream, setUseStream] = useState(false);
   const [chatCompletionsUpstreamMode, setChatCompletionsUpstreamMode] =
     useState<"responses" | "chat_completions" | "images">("responses");
@@ -95,6 +103,7 @@ export function ApiConfigForm() {
         setBaseUrl("");
         setApiKey("");
         setModel("");
+        setModelMapping([]);
         setUseStream(false);
         setChatCompletionsUpstreamMode("responses");
         setHasConfig(false);
@@ -159,6 +168,7 @@ export function ApiConfigForm() {
           setBaseUrl(configResult.data.baseUrl);
           setApiKey(configResult.data.apiKey);
           setModel(configResult.data.model || "");
+          setModelMapping(parseApiModelMapping(configResult.data.modelMapping));
           setUseStream(Boolean(configResult.data.useStream));
           setChatCompletionsUpstreamMode(
             configResult.data.chatCompletionsUpstreamMode ===
@@ -189,6 +199,7 @@ export function ApiConfigForm() {
       baseUrl,
       apiKey,
       model: model || undefined,
+      modelMapping: compactApiModelMapping(modelMapping),
       useStream,
       chatCompletionsUpstreamMode,
     });
@@ -203,7 +214,12 @@ export function ApiConfigForm() {
       toast.error(t("apiConfig.testNeedsInput"));
       return;
     }
-    executeTest({ baseUrl, apiKey, model: model || undefined });
+    executeTest({
+      baseUrl,
+      apiKey,
+      model: model || undefined,
+      modelMapping: compactApiModelMapping(modelMapping),
+    });
   };
 
   if (loading) {
@@ -322,6 +338,25 @@ export function ApiConfigForm() {
               {t("apiConfig.modelHint")}
             </p>
           </div>
+
+          <ApiModelMappingEditor
+            value={modelMapping}
+            onChange={setModelMapping}
+            disabled={!customApiAllowed}
+            labels={{
+              title: t("apiConfig.modelMappingTitle"),
+              hint: t("apiConfig.modelMappingHint"),
+              from: t("apiConfig.modelMappingFrom"),
+              to: t("apiConfig.modelMappingTo"),
+              whenQuality: t("apiConfig.modelMappingWhenQuality"),
+              setQuality: t("apiConfig.modelMappingSetQuality"),
+              anyQuality: t("apiConfig.modelMappingAnyQuality"),
+              add: t("apiConfig.modelMappingAdd"),
+              presetAdobe: t("apiConfig.modelMappingPresetAdobe"),
+              presetGemini: t("apiConfig.modelMappingPresetGemini"),
+              presetHint: t("apiConfig.modelMappingPresetHint"),
+            }}
+          />
 
           {/* Streaming toggle：行 hover 微提亮(与 Active toggle 同配方:无边框 hover 行) */}
           <div className="-mx-2 flex items-center justify-between rounded-md px-2 py-1.5 transition-colors duration-150 hover:bg-muted/30">

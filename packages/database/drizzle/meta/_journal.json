@@ -330,6 +330,13 @@
       "when": 1784886000000,
       "tag": "0046_ticket_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1789528000000,
+      "tag": "0047_api_model_mapping",
+      "breakpoints": true
     }
   ]
 }

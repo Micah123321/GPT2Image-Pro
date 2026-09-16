@@ -154,7 +154,7 @@ create/update service 持久化这两列（列有 DB 默认，旧数据/旧调�
 
 - **视频**：firefly-* 视频模型仍只走真 Adobe；`billingMultiplier` 的视频口径已存在，
   若将来该类 api 真出视频会自动生效，但本期不接视频路径。
-- 多 provider 不同模型名的批量映射表（用 `model` 单字段覆盖即可覆盖现状）。
+- ~~多 provider 不同模型名的批量映射表~~ 已落地：`image_backend_api.model_mapping` / `user_api_config.model_mapping`（见 `api-model-mapping.ts`，含 g-aisc.xyz 预设）。
 
 ## 9. 落地顺序
 
