@@ -1,6 +1,6 @@
 # 2026-09-16 API 模型映射
 
-为对接 [g-aisc.xyz 图片 API](https://g-aisc.xyz/docs/) 增加每条 API 的本站型号 → 上游型号映射。
+为上游网关使用与本站不同的 model id，增加每条 API 的本站型号 → 上游型号映射。
 
 - 列：`image_backend_api.model_mapping`、`user_api_config.model_mapping`（json 数组）。
 - 规则：`from` / `to`，可选 `whenQuality`、`setQuality`。2.5 变体与 firefly 家族会展开匹配；`xhigh`/`max` 视为 high。

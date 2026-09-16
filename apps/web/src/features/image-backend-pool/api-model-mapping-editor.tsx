@@ -21,8 +21,8 @@ import {
   type ApiModelMappingEntry,
   type ApiModelMappingQuality,
   API_MODEL_MAPPING_QUALITIES,
-  G_AISC_ADOBE_MODEL_MAPPING,
-  G_AISC_GEMINI_MODEL_MAPPING,
+  PRESET_GEMINI_IMAGE_MAPPING,
+  PRESET_GPT_IMAGE_ADOBE_MAPPING,
 } from "@/features/image-generation/api-model-mapping";
 
 const QUALITY_ANY = "__any__";
@@ -50,8 +50,8 @@ const DEFAULT_LABELS: ApiModelMappingEditorLabels = {
   setQuality: "出站质量",
   anyQuality: "任意",
   add: "添加映射",
-  presetAdobe: "填入 g-aisc Adobe 渠道",
-  presetGemini: "填入 g-aisc Gemini 渠道",
+  presetAdobe: "填入 Adobe GPT Image 预设",
+  presetGemini: "填入 Gemini 预设",
   presetHint:
     "Adobe 渠道令牌只能调 gpt-image-2-ad / gpt-image-2-high；Gemini 渠道只能调 gemini-*-ad，且不要走 /v1/images/*。",
 };
@@ -117,7 +117,7 @@ export function ApiModelMappingEditor(props: {
           variant="outline"
           size="sm"
           disabled={props.disabled}
-          onClick={() => props.onChange([...G_AISC_ADOBE_MODEL_MAPPING])}
+          onClick={() => props.onChange([...PRESET_GPT_IMAGE_ADOBE_MAPPING])}
         >
           {labels.presetAdobe}
         </Button>
@@ -126,7 +126,7 @@ export function ApiModelMappingEditor(props: {
           variant="outline"
           size="sm"
           disabled={props.disabled}
-          onClick={() => props.onChange([...G_AISC_GEMINI_MODEL_MAPPING])}
+          onClick={() => props.onChange([...PRESET_GEMINI_IMAGE_MAPPING])}
         >
           {labels.presetGemini}
         </Button>

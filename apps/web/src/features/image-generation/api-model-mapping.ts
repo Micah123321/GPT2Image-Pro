@@ -2,7 +2,7 @@
  * API 后端出站模型映射（纯函数，DB-free）。
  *
  * 本站内部型号（gpt-image-2.5 / firefly-nano-banana-pro 等）与上游网关 id
- * （如 g-aisc.xyz 的 gpt-image-2-ad / gemini-3.1-flash-image-preview-ad）往往不同；
+ * （如 gpt-image-2-ad / gemini-3.1-flash-image-preview-ad）往往不同；
  * 单字段 `model` 只作缺省，不能按请求改写。本模块把「本站 from → 上游 to」
  * 做成每条 API 可配的规则表，并支持按 quality 分档（高清走 gpt-image-2-high）。
  *
@@ -39,10 +39,10 @@ export type ApiModelMappingEntry = {
 const QUALITY_SET = new Set<string>(API_MODEL_MAPPING_QUALITIES);
 
 /**
- * g-aisc.xyz「adobe渠道」令牌：只能调 gpt-image-2-ad / gpt-image-2-high。
+ * GPT Image Adobe 兼容上游：普通档 gpt-image-2-ad，高清 gpt-image-2-high。
  * 高清必须显式 quality=high，否则与普通档完全一致。
  */
-export const G_AISC_ADOBE_MODEL_MAPPING: ApiModelMappingEntry[] = [
+export const PRESET_GPT_IMAGE_ADOBE_MAPPING: ApiModelMappingEntry[] = [
   {
     from: "gpt-image-2.5",
     to: "gpt-image-2-high",
@@ -60,10 +60,10 @@ export const G_AISC_ADOBE_MODEL_MAPPING: ApiModelMappingEntry[] = [
 ];
 
 /**
- * g-aisc.xyz「adobe_gemini」令牌：只能调两个 Gemini 型号。
+ * Gemini 图像上游：nano-banana 家族改写成 gemini-*-ad。
  * 这两个 id 不能走 /v1/images/*，API 的 Images 上游需设为 Responses 或对话。
  */
-export const G_AISC_GEMINI_MODEL_MAPPING: ApiModelMappingEntry[] = [
+export const PRESET_GEMINI_IMAGE_MAPPING: ApiModelMappingEntry[] = [
   {
     from: "nano-banana-pro",
     to: "gemini-3-pro-image-preview-ad",
