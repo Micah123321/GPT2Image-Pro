@@ -337,6 +337,13 @@
       "when": 1789528000000,
       "tag": "0047_api_model_mapping",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1789570800000,
+      "tag": "0048_quality_billing_multiplier",
+      "breakpoints": true
     }
   ]
 }

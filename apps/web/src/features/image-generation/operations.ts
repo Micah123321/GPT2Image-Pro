@@ -52,6 +52,7 @@ import {
   shouldPreferWebImageRoute,
   type ImageBillingPixelRange,
 } from "./billing-preview";
+import { resolveQualityBillingMultiplier } from "./quality-billing";
 import {
   detectImageOutputFormatFromBuffer,
   getOutputFormatContentType,
@@ -228,6 +229,23 @@ function getConfigBillingMultiplier(config: ApiConfig) {
     return 1;
   }
   return normalizeBillingMultiplier(config.backend.billingMultiplier);
+}
+
+/** 池成员的质量计价倍率：按【请求 quality】解析（xhigh/max 未配时回退 high）。 */
+function getPoolQualityBillingMultiplier(
+  config: ApiConfig,
+  quality: string | null | undefined
+) {
+  if (
+    config.backend?.type !== "pool-account" &&
+    config.backend?.type !== "pool-api" &&
+    config.backend?.type !== "pool-adobe"
+  ) {
+    return 1;
+  }
+  return normalizeBillingMultiplier(
+    resolveQualityBillingMultiplier(config.backend.qualityBilling, quality)
+  );
 }
 
 /** 把系统设置里的图像模型倍率 JSON 收窄成 family→正数 的 map。 */
@@ -1363,10 +1381,12 @@ export async function runImageGenerationForUser(
               generationId,
             };
           }
-          // 整体计费倍率 = 整个 Adobe(后端)倍率 × 该 firefly 图像模型族倍率。
-          // 模型族倍率只在此处折入一次,得到的 effectiveMultiplier 作为本次请求统一的
-          // billingMultiplier 向下传递,确保扣费/明细/退款/元数据口径一致(退款须按相同
-          // 倍率结算,故元数据上报的 billingMultiplier 即 effectiveMultiplier)。
+          // 整体计费倍率 = 整个 Adobe(后端)倍率 × 该 firefly 图像模型族倍率 × 质量倍率。
+          // 模型族倍率与质量倍率只在此处折入一次,得到的 effectiveMultiplier 作为本次
+          // 请求统一的 billingMultiplier 向下传递,确保扣费/明细/退款/元数据口径一致
+          // (退款须按相同倍率结算,故元数据上报的 billingMultiplier 即 effectiveMultiplier)。
+          // 质量倍率按用户【请求的 quality】解析(默认 auto),不改写出站口径——出站
+          // 质量改写(model_mapping.setQuality)属路由层行为,不回灌计价。
           const backendBillingMultiplier = getConfigBillingMultiplier(config);
           const imageModelMultipliers = parseImageModelMultipliers(
             await getRuntimeSettingJson("IMAGE_MODEL_MULTIPLIERS")
@@ -1377,7 +1397,12 @@ export async function runImageGenerationForUser(
               : input.model,
             imageModelMultipliers
           );
-          const billingMultiplier = backendBillingMultiplier * modelMultiplier;
+          const qualityBillingMultiplier = getPoolQualityBillingMultiplier(
+            config,
+            input.quality
+          );
+          const billingMultiplier =
+            backendBillingMultiplier * modelMultiplier * qualityBillingMultiplier;
           const moderationEnabled =
             (await isContentModerationEnabled()) &&
             moderationBlockingEnabled &&
@@ -1498,6 +1523,7 @@ export async function runImageGenerationForUser(
             useCredits,
             billingPolicy,
             billingMultiplier,
+            qualityBillingMultiplier,
             imageModel,
             gptModel,
             recordModel,
@@ -1548,6 +1574,7 @@ async function runQueuedImageGenerationForUser({
   useCredits,
   billingPolicy,
   billingMultiplier,
+  qualityBillingMultiplier,
   imageModel,
   gptModel,
   recordModel,
@@ -1578,6 +1605,7 @@ async function runQueuedImageGenerationForUser({
   useCredits: boolean;
   billingPolicy: GenerationBillingPolicy;
   billingMultiplier: number;
+  qualityBillingMultiplier: number;
   imageModel: string;
   gptModel?: string;
   recordModel: string;
@@ -1602,6 +1630,10 @@ async function runQueuedImageGenerationForUser({
   });
   const billingMetadata = {
     billingMultiplier,
+    // 质量倍率单独留痕：billingMultiplier 为三者乘积（后端×模型族×质量），
+    // 拆出质量分量便于对账时区分定价来源。
+    qualityBillingMultiplier,
+    requestedQuality: input.quality ?? null,
     billingGroupId: config.backend?.billingGroupId ?? null,
     chargeImageCredits: billingPolicy.chargeImageCredits,
     chargeModerationCredits: billingPolicy.chargeModerationCredits,

@@ -861,6 +861,12 @@ export const imageBackendAccount = pgTable(
     refreshToken: text("refresh_token"),
     implementationMode: text("interface_mode").notNull().default("web"),
     model: text("model"),
+    // 质量计价倍率：quality(auto/low/medium/high/xhigh/max) → 倍率。未配置档位
+    // 计 1 倍。与 imageBackendApi.qualityBilling 同义，web/codex 账号均可配置；
+    // 折入 operations.ts 的总 billingMultiplier（与分组倍率相乘）。
+    qualityBilling: json("quality_billing").$type<
+      Partial<Record<string, number>>
+    >(),
     contentSafetyEnabled: boolean("content_safety_enabled").notNull().default(true),
     isEnabled: boolean("is_enabled").notNull().default(true),
     // 遇错也始终可用：与 isEnabled 同时为真时，该账号永不进入冷却、不因失败被
@@ -929,6 +935,12 @@ export const imageBackendApi = pgTable("image_backend_api", {
     }>
   >(),
   interfaceMode: text("interface_mode").notNull().default("images"),
+  // 质量计价倍率：quality(auto/low/medium/high/xhigh/max) → 倍率。未配置档位
+  // 计 1 倍。折入 operations.ts 的总 billingMultiplier（与分组倍率、模型族倍率
+  // 相乘），作用于该 API 服务的图像/对话轮次扣费。解析见 quality-billing.ts。
+  qualityBilling: json("quality_billing").$type<
+    Partial<Record<string, number>>
+  >(),
   useStream: boolean("use_stream").notNull().default(false),
   chatCompletionsUpstreamMode: text("chat_completions_upstream_mode")
     .notNull()

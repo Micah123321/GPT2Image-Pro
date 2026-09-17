@@ -75,6 +75,12 @@ import {
   compactApiModelMapping,
 } from "./api-model-mapping-editor";
 import {
+  emptyQualityBillingForm,
+  QualityBillingEditor,
+  qualityBillingFromForm,
+  qualityBillingToForm,
+} from "./quality-billing-editor";
+import {
   bulkDeleteImageBackendAccountsAction,
   bulkUpdateImageBackendAccountsAction,
   deleteAdobeAccountAction,
@@ -148,6 +154,8 @@ type Account = {
   email: string | null;
   implementationMode: string;
   model: string | null;
+  // 质量计价倍率表（quality → 倍率）；null/未配置档位计 1 倍。
+  qualityBilling?: Partial<Record<string, number>> | null;
   contentSafetyEnabled: boolean;
   isEnabled: boolean;
   alwaysActive: boolean;
@@ -190,6 +198,8 @@ type Api = {
     whenQuality?: string;
     setQuality?: string;
   }> | null;
+  // 质量计价倍率表（quality → 倍率）；null/未配置档位计 1 倍。
+  qualityBilling?: Partial<Record<string, number>> | null;
   interfaceMode: ImageBackendApiInterfaceMode;
   chatCompletionsUpstreamMode: ChatCompletionsUpstreamModeFormValue;
   imagesUpstreamMode: ImagesUpstreamModeFormValue;
@@ -825,6 +835,7 @@ export function ImageBackendPoolAdminPanel({
     refreshToken: "",
     implementationMode: "web" as AccountBackendFormValue,
     model: "",
+    qualityBilling: emptyQualityBillingForm(),
     contentSafetyEnabled: true,
     isEnabled: true,
     alwaysActive: false,
@@ -840,6 +851,7 @@ export function ImageBackendPoolAdminPanel({
     apiKey: "",
     model: "",
     modelMapping: [] as ReturnType<typeof parseApiModelMapping>,
+    qualityBilling: emptyQualityBillingForm(),
     interfaceMode: "mixed" as ApiInterfaceModeFormValue,
     chatCompletionsUpstreamMode:
       "responses" as ChatCompletionsUpstreamModeFormValue,
@@ -1102,6 +1114,7 @@ export function ImageBackendPoolAdminPanel({
       refreshToken: "",
       implementationMode: "web" as AccountBackendFormValue,
       model: "",
+      qualityBilling: emptyQualityBillingForm(),
       contentSafetyEnabled: true,
       isEnabled: true,
       alwaysActive: false,
@@ -1119,6 +1132,7 @@ export function ImageBackendPoolAdminPanel({
       apiKey: "",
       model: "",
       modelMapping: [],
+      qualityBilling: emptyQualityBillingForm(),
       interfaceMode: "mixed" as ApiInterfaceModeFormValue,
       chatCompletionsUpstreamMode:
         "responses" as ChatCompletionsUpstreamModeFormValue,
@@ -1210,6 +1224,7 @@ export function ImageBackendPoolAdminPanel({
       refreshToken: "",
       implementationMode: normalizeBackendFormValue(account.implementationMode),
       model: account.model || "",
+      qualityBilling: qualityBillingToForm(account.qualityBilling),
       contentSafetyEnabled: account.contentSafetyEnabled,
       isEnabled: account.isEnabled,
       alwaysActive: account.alwaysActive,
@@ -1273,6 +1288,7 @@ export function ImageBackendPoolAdminPanel({
       apiKey: "",
       model: api.model || "",
       modelMapping: parseApiModelMapping(api.modelMapping),
+      qualityBilling: qualityBillingToForm(api.qualityBilling),
       interfaceMode: api.interfaceMode || "images",
       chatCompletionsUpstreamMode:
         api.chatCompletionsUpstreamMode || "responses",
@@ -2921,6 +2937,15 @@ export function ImageBackendPoolAdminPanel({
                     }
                   />
                 </div>
+                <QualityBillingEditor
+                  value={accountForm.qualityBilling}
+                  onChange={(qualityBilling) =>
+                    setAccountForm((current) => ({
+                      ...current,
+                      qualityBilling,
+                    }))
+                  }
+                />
                 <Button
                   className="w-full"
                   onClick={() =>
@@ -2928,6 +2953,9 @@ export function ImageBackendPoolAdminPanel({
                       ...accountForm,
                       groupId: accountForm.groupIds[0] || "default",
                       groupIds: accountForm.groupIds,
+                      qualityBilling: qualityBillingFromForm(
+                        accountForm.qualityBilling
+                      ),
                     })
                   }
                   disabled={
@@ -3808,6 +3836,12 @@ export function ImageBackendPoolAdminPanel({
                     setApiForm((current) => ({ ...current, modelMapping }))
                   }
                 />
+                <QualityBillingEditor
+                  value={apiForm.qualityBilling}
+                  onChange={(qualityBilling) =>
+                    setApiForm((current) => ({ ...current, qualityBilling }))
+                  }
+                />
                 <div className="space-y-2">
                   <Label>接口类型</Label>
                   <Select
@@ -4088,6 +4122,9 @@ export function ImageBackendPoolAdminPanel({
                       groupIds: apiForm.groupIds,
                       modelMapping: compactApiModelMapping(
                         apiForm.modelMapping
+                      ),
+                      qualityBilling: qualityBillingFromForm(
+                        apiForm.qualityBilling
                       ),
                     })
                   }

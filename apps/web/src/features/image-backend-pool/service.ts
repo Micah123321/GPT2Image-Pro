@@ -49,6 +49,7 @@ import {
 import { nanoid } from "nanoid";
 import { Pool } from "pg";
 import { parseApiModelMapping } from "@/features/image-generation/api-model-mapping";
+import { normalizeQualityBillingForStorage } from "@/features/image-generation/quality-billing";
 
 import {
   type ChatGptWebAccountInfo,
@@ -196,6 +197,8 @@ type PoolMember =
         whenQuality?: string;
         setQuality?: string;
       }> | null;
+      // 质量计价倍率表（quality → 倍率）；未配置档位计 1。解析见 quality-billing.ts。
+      qualityBilling?: Partial<Record<string, number>> | null;
       interfaceMode: ImageBackendApiInterfaceMode;
       chatCompletionsUpstreamMode: ChatCompletionsUpstreamMode;
       imagesUpstreamMode: ImagesUpstreamMode;
@@ -229,6 +232,8 @@ type PoolMember =
       accessToken: string;
       model: string | null;
       implementationMode: string;
+      // 质量计价倍率表（quality → 倍率）；web/codex 账号均可配置，未配置档位计 1。
+      qualityBilling?: Partial<Record<string, number>> | null;
       contentSafetyEnabled: boolean;
       priority: number;
       concurrency: number;
@@ -2516,6 +2521,7 @@ async function selectPoolMember(
           accessToken: imageBackendAccount.accessToken,
           model: imageBackendAccount.model,
           implementationMode: imageBackendAccount.implementationMode,
+          qualityBilling: imageBackendAccount.qualityBilling,
           contentSafetyEnabled: imageBackendAccount.contentSafetyEnabled,
           priority: imageBackendAccount.priority,
           concurrency: imageBackendAccount.concurrency,
@@ -2550,6 +2556,7 @@ async function selectPoolMember(
           accessToken: imageBackendAccount.accessToken,
           model: imageBackendAccount.model,
           implementationMode: imageBackendAccount.implementationMode,
+          qualityBilling: imageBackendAccount.qualityBilling,
           contentSafetyEnabled: imageBackendAccount.contentSafetyEnabled,
           priority: imageBackendAccount.priority,
           concurrency: imageBackendAccount.concurrency,
@@ -2607,6 +2614,7 @@ async function selectPoolMember(
           apiKey: imageBackendApi.apiKey,
           model: imageBackendApi.model,
           modelMapping: imageBackendApi.modelMapping,
+          qualityBilling: imageBackendApi.qualityBilling,
           interfaceMode: imageBackendApi.interfaceMode,
           chatCompletionsUpstreamMode:
             imageBackendApi.chatCompletionsUpstreamMode,
@@ -2646,6 +2654,7 @@ async function selectPoolMember(
           apiKey: imageBackendApi.apiKey,
           model: imageBackendApi.model,
           modelMapping: imageBackendApi.modelMapping,
+          qualityBilling: imageBackendApi.qualityBilling,
           interfaceMode: imageBackendApi.interfaceMode,
           chatCompletionsUpstreamMode:
             imageBackendApi.chatCompletionsUpstreamMode,
@@ -2808,6 +2817,7 @@ async function selectPoolMember(
         apiKey: row.apiKey,
         model: row.model,
         modelMapping: row.modelMapping,
+        qualityBilling: row.qualityBilling,
         interfaceMode: normalizeImageBackendApiInterfaceMode(row.interfaceMode),
         chatCompletionsUpstreamMode: normalizeChatCompletionsUpstreamMode(
           row.chatCompletionsUpstreamMode
@@ -2875,6 +2885,7 @@ async function selectPoolMember(
       accessToken: row.accessToken,
       model: row.model,
       implementationMode: row.implementationMode,
+      qualityBilling: row.qualityBilling,
       contentSafetyEnabled: row.contentSafetyEnabled,
       priority: row.priority,
       concurrency: row.concurrency,
@@ -3255,6 +3266,9 @@ function toResolvedPoolConfig(
           billingMultiplier: member.adobeSourced
             ? billingMultiplier * (member.billingMultiplier || 1)
             : billingMultiplier,
+          // 质量计价倍率表（quality → 倍率）：由 operations.ts 按请求 quality 解析
+          // 后折入总倍率，与组/成员倍率相乘。
+          qualityBilling: member.qualityBilling ?? null,
           priority: member.priority,
           reportResult: true,
           inflightLease: true,
@@ -3349,6 +3363,8 @@ function toResolvedPoolConfig(
         accountBackend: implementationMode,
         billingGroupId: fallbackGroupId,
         billingMultiplier,
+        // 质量计价倍率表（quality → 倍率），web/codex 账号同构；解析在 operations.ts。
+        qualityBilling: member.qualityBilling ?? null,
         priority: member.priority,
         reportResult: true,
         inflightLease: true,
@@ -4315,6 +4331,8 @@ type UpsertAccountInput = {
   refreshToken?: string | null;
   implementationMode: ImageBackendAccountBackend;
   model?: string | null;
+  // 质量计价倍率表（quality → 倍率）；undefined=不改动（同步/导入链路），null=清空。
+  qualityBilling?: Partial<Record<string, number>> | null;
   contentSafetyEnabled: boolean;
   isEnabled: boolean;
   alwaysActive?: boolean;
@@ -4436,6 +4454,14 @@ export async function upsertImageBackendAccount(input: UpsertAccountInput) {
     model: input.model || null,
     contentSafetyEnabled: input.contentSafetyEnabled,
     isEnabled: input.isEnabled,
+    // 质量倍率仅在显式传入时写库（同步/换 token 等内部链路不带该字段，保留原值）。
+    ...(input.qualityBilling !== undefined
+      ? {
+          qualityBilling: normalizeQualityBillingForStorage(
+            input.qualityBilling
+          ),
+        }
+      : {}),
     ...(input.alwaysActive !== undefined
       ? { alwaysActive: input.alwaysActive }
       : {}),
@@ -7361,6 +7387,8 @@ type UpsertApiInput = {
     whenQuality?: string;
     setQuality?: string;
   }> | null;
+  // 质量计价倍率表（quality → 倍率）；undefined=不改动，null=清空。
+  qualityBilling?: Partial<Record<string, number>> | null;
   interfaceMode?: ImageBackendApiInterfaceMode;
   chatCompletionsUpstreamMode?: ChatCompletionsUpstreamMode;
   imagesUpstreamMode?: ImagesUpstreamMode;
@@ -7425,6 +7453,14 @@ export async function upsertImageBackendApi(input: UpsertApiInput) {
     baseUrl: stripTrailingSlash(input.baseUrl),
     model: input.model || null,
     modelMapping: input.modelMapping?.length ? input.modelMapping : null,
+    // 质量倍率仅在显式传入时写库（其余链路不带该字段，保留原值）。
+    ...(input.qualityBilling !== undefined
+      ? {
+          qualityBilling: normalizeQualityBillingForStorage(
+            input.qualityBilling
+          ),
+        }
+      : {}),
     interfaceMode: normalizeImageBackendApiInterfaceMode(input.interfaceMode),
     chatCompletionsUpstreamMode: normalizeChatCompletionsUpstreamMode(
       input.chatCompletionsUpstreamMode
@@ -8077,6 +8113,7 @@ export async function listAdminImageBackendAccounts(
       email: imageBackendAccount.email,
       implementationMode: imageBackendAccount.implementationMode,
       model: imageBackendAccount.model,
+      qualityBilling: imageBackendAccount.qualityBilling,
       contentSafetyEnabled: imageBackendAccount.contentSafetyEnabled,
       isEnabled: imageBackendAccount.isEnabled,
       alwaysActive: imageBackendAccount.alwaysActive,
@@ -8189,6 +8226,7 @@ export async function listAdminImageBackendPool() {
       baseUrl: imageBackendApi.baseUrl,
       model: imageBackendApi.model,
       modelMapping: imageBackendApi.modelMapping,
+      qualityBilling: imageBackendApi.qualityBilling,
       interfaceMode: imageBackendApi.interfaceMode,
       chatCompletionsUpstreamMode: imageBackendApi.chatCompletionsUpstreamMode,
       imagesUpstreamMode: imageBackendApi.imageUpstreamMode,

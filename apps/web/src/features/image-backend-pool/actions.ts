@@ -326,6 +326,16 @@ export const deleteImageBackendGroupAction = withImageBackendPoolAdminAction(
     return { success: true };
   });
 
+// 质量计价倍率：quality 档位 → 正倍率（只配部分档位）。未配置档位计 1 倍；
+// service 侧经 normalizeQualityBillingForStorage 清洗收敛（空表落 null）。
+// 池 API 与账号共用。
+const qualityBillingSchema = z
+  .partialRecord(
+    z.enum(["auto", "low", "medium", "high", "xhigh", "max"]),
+    z.number().finite().positive().max(100)
+  )
+  .nullish();
+
 export const saveImageBackendAccountAction = withImageBackendPoolAdminAction(
   "saveAccount"
 )
@@ -340,6 +350,7 @@ export const saveImageBackendAccountAction = withImageBackendPoolAdminAction(
       refreshToken: z.string().trim().optional(),
       implementationMode: accountBackendSchema.default("web"),
       model: z.string().trim().max(120).optional(),
+      qualityBilling: qualityBillingSchema,
       contentSafetyEnabled: z.boolean().default(true),
       isEnabled: z.boolean().default(true),
       alwaysActive: z.boolean().default(false),
@@ -359,6 +370,7 @@ export const saveImageBackendAccountAction = withImageBackendPoolAdminAction(
       refreshToken: parsedInput.refreshToken || undefined,
       implementationMode: parsedInput.implementationMode,
       model: parsedInput.model || null,
+      qualityBilling: parsedInput.qualityBilling ?? null,
       contentSafetyEnabled: parsedInput.contentSafetyEnabled,
       isEnabled: parsedInput.isEnabled,
       alwaysActive: parsedInput.alwaysActive,
@@ -607,6 +619,7 @@ export const saveImageBackendApiAction = withImageBackendPoolAdminAction(
         )
         .max(50)
         .optional(),
+      qualityBilling: qualityBillingSchema,
       interfaceMode: apiInterfaceModeSchema.default("mixed"),
       chatCompletionsUpstreamMode:
         chatCompletionsUpstreamModeSchema.default("responses"),
@@ -635,6 +648,7 @@ export const saveImageBackendApiAction = withImageBackendPoolAdminAction(
       apiKey: parsedInput.apiKey || undefined,
       model: parsedInput.model || null,
       modelMapping: parsedInput.modelMapping || null,
+      qualityBilling: parsedInput.qualityBilling ?? null,
       interfaceMode: parsedInput.interfaceMode,
       chatCompletionsUpstreamMode: parsedInput.chatCompletionsUpstreamMode,
       imagesUpstreamMode: parsedInput.imagesUpstreamMode,

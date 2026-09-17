@@ -340,6 +340,10 @@ export interface ApiConfig {
     adobeGptImageQuality?: string;
     billingGroupId?: string | null;
     billingMultiplier?: number;
+    // 池 API / 池账号成员的质量计价倍率表（quality → 倍率，DB json 原样）。
+    // 解析与回退规则见 quality-billing.ts；operations.ts 把它按请求 quality
+    // 折入总 billingMultiplier。
+    qualityBilling?: Partial<Record<string, number>> | null;
     // 池成员调度优先级(越小越先)。换号预算按同优先级计数,耗尽后跳到更高数值的下一档。
     priority?: number;
     reportResult?: boolean;
