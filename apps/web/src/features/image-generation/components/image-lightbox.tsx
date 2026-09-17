@@ -142,20 +142,20 @@ export function ImageLightbox({
           : null,
         creditDetails.baseCredits !== null
           ? {
-              label: copy("Base image", "基础生图"),
-              value: `${formatCredits(creditDetails.baseCredits)} ${copy(
-                "credits",
-                "积分"
-              )}`,
+              label: copy("Base image (pre-multiplier)", "基础生图（倍率前）"),
+              value: `${formatCredits(
+                creditDetails.baseCreditsBeforeMultiplier ??
+                  creditDetails.baseCredits
+              )} ${copy("credits", "积分")}`,
             }
           : null,
         creditDetails.moderationCredits !== null
           ? {
-              label: copy("Review add-on", "审核附加"),
-              value: `${formatCredits(creditDetails.moderationCredits)} ${copy(
-                "credits",
-                "积分"
-              )}`,
+              label: copy("Review add-on (pre-multiplier)", "审核附加（倍率前）"),
+              value: `${formatCredits(
+                creditDetails.moderationCreditsBeforeMultiplier ??
+                  creditDetails.moderationCredits
+              )} ${copy("credits", "积分")}`,
             }
           : null,
         creditDetails.chatCredits !== null && creditDetails.chatCredits > 0
@@ -175,7 +175,9 @@ export function ImageLightbox({
             }
           : null,
         {
-          label: copy("Group multiplier", "分组倍率"),
+          // 总倍率 = 分组/成员倍率 × 模型族倍率 × 质量倍率（历史记录不拆分量）。
+          // 明细公式：(基础生图 + 审核附加) × 计费倍率 ≈ 图片小计。
+          label: copy("Billing multiplier", "计费倍率"),
           value: `x${formatMultiplier(creditDetails.billingMultiplier)}`,
         },
         creditDetails.billableImageOutputCount !== null

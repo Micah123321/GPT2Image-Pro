@@ -90,7 +90,7 @@ import {
   AUTO_IMAGE_SIZE,
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_SIZE,
-  getImageCreditCost,
+  getImageCreditCostBreakdown,
   type ImageBaseCreditPricing,
   type ImageQualityLevel,
   type ImageThinkingLevel,
@@ -2013,11 +2013,12 @@ export function CreatePageClient({
     backendGroups.find((group) => group.id === selectedBackendGroupId) ||
     backendGroups.find((group) => group.isDefault) ||
     null;
-  const getPricedImageCreditCost = (
+  // 倍率前报价明细（基础 + 审核），供预估公式展示；与倍率相乘后才是一次请求的预估价。
+  const getPricedImageCreditBreakdown = (
     requestedSize?: string | null,
-    options: Parameters<typeof getImageCreditCost>[1] = {}
+    options: Parameters<typeof getImageCreditCostBreakdown>[1] = {}
   ) =>
-    getImageCreditCost(requestedSize, {
+    getImageCreditCostBreakdown(requestedSize, {
       ...options,
       basePricing: imageBasePricing,
       quality: (options.quality ??
@@ -2025,6 +2026,34 @@ export function CreatePageClient({
       thinking: (options.thinking ??
         chatThinking) as ImageThinkingLevel | undefined,
     });
+  const getPricedImageCreditCost = (
+    requestedSize?: string | null,
+    options: Parameters<typeof getImageCreditCostBreakdown>[1] = {}
+  ) => getPricedImageCreditBreakdown(requestedSize, options).totalCredits;
+  // 预估费用计算公式文案：（基础 a + 审核 b）× 倍率 m；审核为 0 时省略加法段。
+  // chat/agent 轮次报价 baseLabel 传「轮次」。
+  const creditFormulaLabel = (params: {
+    baseLabel?: { en: string; zh: string };
+    baseCredits: number;
+    moderationCredits: number;
+    multiplier: number;
+  }) => {
+    const baseLabel = params.baseLabel
+      ? copy(params.baseLabel.en, params.baseLabel.zh)
+      : copy("base", "基础");
+    const multiplier = Number(params.multiplier.toFixed(4)).toString();
+    const base = formatCredits(params.baseCredits);
+    const basePart =
+      params.moderationCredits > 0
+        ? `${baseLabel} ${base} ${copy("+ review", "+ 审核")} ${formatCredits(
+            params.moderationCredits
+          )}`
+        : `${baseLabel} ${base}`;
+    return copy(
+      `(${basePart}) × x${multiplier}`,
+      `（${basePart}）× 倍率 ${multiplier}`
+    );
+  };
   const activeBackendType = selectedBackendGroup?.backendType || "mixed";
   const isWebOnlyBackend = activeBackendType === "web";
   const showImageModelControls = !isWebOnlyBackend;
@@ -3046,6 +3075,39 @@ export function CreatePageClient({
         editBillingRoute.billingMultiplier
       );
   const editBatchCreditCost = editImageCreditCost * editBatchCount;
+  // 倍率前明细与预估公式文案（与上方倍率后报价同源同参数，保证公式与数字自洽）。
+  const textImageBaseBreakdown = getPricedImageCreditBreakdown(
+    size,
+    moderationCostOptions
+  );
+  const editImageBaseBreakdown = effectiveEditSize
+    ? getPricedImageCreditBreakdown(
+        effectiveEditSize,
+        getModerationCostOptions(editImages.length)
+      )
+    : getPricedImageCreditBreakdown(undefined, moderationCostOptions);
+  const textCreditFormula = creditFormulaLabel({
+    baseCredits: textImageBaseBreakdown.baseCredits,
+    moderationCredits: textImageBaseBreakdown.moderationCredits,
+    multiplier: textBillingRoute.billingMultiplier,
+  });
+  const editCreditFormula = creditFormulaLabel({
+    baseCredits: editImageBaseBreakdown.baseCredits,
+    moderationCredits: editImageBaseBreakdown.moderationCredits,
+    multiplier: editBillingRoute.billingMultiplier,
+  });
+  const chatRoundCreditFormula = creditFormulaLabel({
+    baseLabel: { en: "round", zh: "轮次" },
+    baseCredits: capabilities.billing.chatRoundCredits,
+    moderationCredits: 0,
+    multiplier: chatBillingRoute.billingMultiplier,
+  });
+  const agentRoundCreditFormula = creditFormulaLabel({
+    baseLabel: { en: "round", zh: "轮次" },
+    baseCredits: capabilities.billing.agentRoundCredits,
+    moderationCredits: 0,
+    multiplier: agentBillingRoute.billingMultiplier,
+  });
   const chatRoundCreditCost = applyBillingPreviewMultiplier(
     capabilities.billing.chatRoundCredits,
     chatBillingRoute.billingMultiplier
@@ -3116,6 +3178,21 @@ export function CreatePageClient({
       ? agentBillingRoute.billingMultiplier
       : chatBillingRoute.billingMultiplier
   );
+  // chat/agent 会话内批量出图与轮次报价共用各自车道的预测倍率。
+  const batchSingleBaseBreakdown = getPricedImageCreditBreakdown(
+    batchFallbackSize,
+    getModerationCostOptions(chatImageAttachmentCount)
+  );
+  const batchSingleCreditFormula = creditFormulaLabel({
+    baseCredits: batchSingleBaseBreakdown.baseCredits,
+    moderationCredits: batchSingleBaseBreakdown.moderationCredits,
+    multiplier:
+      activeMode === "agent"
+        ? agentBillingRoute.billingMultiplier
+        : chatBillingRoute.billingMultiplier,
+  });
+  const chatSingleCreditFormula =
+    activeMode === "agent" ? agentRoundCreditFormula : chatRoundCreditFormula;
   const formattedBalance = formatCredits(balance);
   const formattedTextBatchCreditCost = formatCredits(textBatchCreditCost);
   const formattedLineBatchCreditCost = formatCredits(lineBatchCreditCost);
@@ -5826,6 +5903,9 @@ export function CreatePageClient({
                 {copy("Cost", "费用")}{" "}
                 <span className="font-medium text-foreground">
                   {formattedChatSingleCreditCost}
+                </span>{" "}
+                <span className="text-muted-foreground">
+                  {chatSingleCreditFormula}
                 </span>
               </>
             )}
@@ -7870,7 +7950,10 @@ export function CreatePageClient({
                 <span className="font-medium text-foreground">
                   {formattedCost}
                 </span>
-                {costSuffix}
+                {costSuffix}{" "}
+                <span className="text-muted-foreground">
+                  {copy("per image", "单张")} {textCreditFormula}
+                </span>
               </span>
             )}
           </div>
@@ -8927,7 +9010,10 @@ export function CreatePageClient({
                         <span className="font-medium text-foreground">
                           {formattedEditBatchCreditCost}
                         </span>
-                        {batchCostSuffix(editBatchCount)}
+                        {batchCostSuffix(editBatchCount)}{" "}
+                        <span className="text-muted-foreground">
+                          {copy("per image", "单张")} {editCreditFormula}
+                        </span>
                       </>
                     )}
                   </p>
@@ -9596,6 +9682,9 @@ export function CreatePageClient({
                       {copy("Per image", "单张预计")}{" "}
                       <span className="font-medium text-foreground">
                         {formattedBatchSingleCreditCost}
+                      </span>{" "}
+                      <span className="text-muted-foreground">
+                        {batchSingleCreditFormula}
                       </span>
                       {isBatchActive && (
                         <>

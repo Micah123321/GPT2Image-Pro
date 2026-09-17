@@ -1,7 +1,10 @@
 export type GenerationCreditDetails = {
   actualImageCredits: number | null;
   actualSize: string | null;
+  /** 倍率后基础生图积分（库内 creditCost/perOutput 存储口径）。 */
   baseCredits: number | null;
+  /** 倍率前基础生图积分（展示用，由 baseCredits / 计费倍率 反推，两位小数）。 */
+  baseCreditsBeforeMultiplier: number | null;
   billableImageOutputCount: number | null;
   billingGroupId: string | null;
   billingMultiplier: number;
@@ -11,6 +14,8 @@ export type GenerationCreditDetails = {
   imageModerationCount: number | null;
   mode: string | null;
   moderationCredits: number | null;
+  /** 倍率前审核附加积分（展示用，反推口径同 baseCreditsBeforeMultiplier）。 */
+  moderationCreditsBeforeMultiplier: number | null;
   requestedSize: string | null;
   requestedTotalCredits: number | null;
   textModerationCount: number | null;
@@ -73,6 +78,18 @@ function sumCreditCosts(
   return found ? Math.round((total + Number.EPSILON) * 100) / 100 : null;
 }
 
+/**
+ * 由倍率后数值反推倍率前展示值。服务端口径是「倍率前 × 倍率后逐项向上取整两位」，
+ * 反推按就近取整两位，仅用于明细展示（公式自洽），不参与任何结算。
+ */
+function creditsBeforeMultiplier(
+  value: number | null,
+  multiplier: number
+): number | null {
+  if (value === null || !(multiplier > 0)) return null;
+  return Math.round((value / multiplier + Number.EPSILON) * 100) / 100;
+}
+
 export function extractGenerationCreditDetails(
   metadata: unknown,
   creditsConsumed: number
@@ -125,6 +142,10 @@ export function extractGenerationCreditDetails(
     actualImageCredits,
     actualSize: readString(outputImage.actualSize),
     baseCredits,
+    baseCreditsBeforeMultiplier: creditsBeforeMultiplier(
+      baseCredits,
+      billingMultiplier
+    ),
     billableImageOutputCount: readNumber(outputImage.billableImageOutputCount),
     billingGroupId:
       readString(metadata.billingGroupId) ?? readString(backend.billingGroupId),
@@ -139,6 +160,10 @@ export function extractGenerationCreditDetails(
       null,
     mode: readString(metadata.mode),
     moderationCredits,
+    moderationCreditsBeforeMultiplier: creditsBeforeMultiplier(
+      moderationCredits,
+      billingMultiplier
+    ),
     requestedSize: readString(outputImage.requestedSize),
     requestedTotalCredits:
       requestedCreditCost?.totalCredits ?? creditCost?.totalCredits ?? null,
