@@ -105,6 +105,7 @@ export default async function CreatePage() {
         backendType: group.backendType,
         contentSafetyEnabled: group.contentSafetyEnabled,
         billingMultiplier: group.billingMultiplier,
+        qualityMultipliers: group.qualityMultipliers ?? null,
         childGroupIds: group.childGroupIds,
       }))}
       selectedBackendGroupId={selectedBackendGroupId}

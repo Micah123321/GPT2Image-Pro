@@ -41,3 +41,12 @@ ChatGPT 账号（web / codex 车道）也要支持。
 
 含迁移 0048（纯加列、IF NOT EXISTS，向后兼容），须**先迁移后切流**（蓝绿
 runbook 纪律）。旧行为不变：未配置任何档位 = 全部 1 倍。
+
+## 创作页报价联动（2026-09-17 追加）
+
+`listImageBackendGroupOptions` 附带每分组的 `qualityMultipliers`（组内启用
+成员 API+账号的 quality_billing 各档**最大值**，报价用上限，实际扣费按命中
+成员）。创作页按预测车道（mixed 合并父组与预测子组取最大）+ 当前所选 quality
+解析（复用 `resolveQualityBillingMultiplier`，xhigh/max 回退 high 口径一致），
+折入四处预估价与公式：`（基础 a + 审核 b）× 分组 m × 质量 q`（q=1 时省略）。
+切换质量下拉（如 high）即时更新倍率与预估费用。

@@ -108,7 +108,9 @@ import {
   predictImageBillingRoute,
   shouldPreferWebImageRoute,
   type ImageBillingPixelRange,
+  type PredictedImageBillingRoute,
 } from "../billing-preview";
+import { resolveQualityBillingMultiplier } from "../quality-billing";
 import type { VideoPricingInfo } from "../video-operations";
 import { ImageLightbox, type LightboxGeneration } from "./image-lightbox";
 import { VideoCreatePanel } from "./video-create-panel";
@@ -595,6 +597,7 @@ type BackendGroupOption = {
   backendType: ImageBackendGroupBackendType;
   contentSafetyEnabled: boolean | null;
   billingMultiplier: number;
+  qualityMultipliers?: Partial<Record<string, number>> | null;
   childGroupIds: string[];
 };
 
@@ -2030,13 +2033,15 @@ export function CreatePageClient({
     requestedSize?: string | null,
     options: Parameters<typeof getImageCreditCostBreakdown>[1] = {}
   ) => getPricedImageCreditBreakdown(requestedSize, options).totalCredits;
-  // 预估费用计算公式文案：（基础 a + 审核 b）× 倍率 m；审核为 0 时省略加法段。
-  // chat/agent 轮次报价 baseLabel 传「轮次」。
+  // 预估费用计算公式文案：（基础 a + 审核 b）× 分组倍率 m × 质量倍率 q。
+  // 审核为 0 时省略加法段；质量倍率为 1 时省略质量段。chat/agent 轮次报价
+  // baseLabel 传「轮次」。
   const creditFormulaLabel = (params: {
     baseLabel?: { en: string; zh: string };
     baseCredits: number;
     moderationCredits: number;
     multiplier: number;
+    qualityMultiplier?: number;
   }) => {
     const baseLabel = params.baseLabel
       ? copy(params.baseLabel.en, params.baseLabel.zh)
@@ -2049,9 +2054,18 @@ export function CreatePageClient({
             params.moderationCredits
           )}`
         : `${baseLabel} ${base}`;
+    const groupPart = copy(`× group x${multiplier}`, `× 分组 ${multiplier}`);
+    const qualityMultiplier = params.qualityMultiplier ?? 1;
+    const qualityPart =
+      qualityMultiplier !== 1
+        ? copy(
+            ` × quality x${Number(qualityMultiplier.toFixed(4)).toString()}`,
+            ` × 质量 ${Number(qualityMultiplier.toFixed(4)).toString()}`
+          )
+        : "";
     return copy(
-      `(${basePart}) × x${multiplier}`,
-      `（${basePart}）× 倍率 ${multiplier}`
+      `(${basePart}) ${groupPart}${qualityPart}`,
+      `（${basePart}）${groupPart}${qualityPart}`
     );
   };
   const activeBackendType = selectedBackendGroup?.backendType || "mixed";
@@ -3045,11 +3059,55 @@ export function CreatePageClient({
     groups: backendGroups,
     preferredBackendType: "responses",
   });
+  // 质量计价倍率（预估用上限）：预测命中组的成员 quality_billing 各档上限
+  // （mixed 时合并父组与预测子组取最大）按当前所选 quality 解析；未配置档位
+  // 为 1，xhigh/max 回退 high，与服务端 operations.ts 扣费口径一致。
+  const mergeQualityMultipliers = (
+    configs: Array<Partial<Record<string, number>> | null | undefined>
+  ): Partial<Record<string, number>> | null => {
+    const merged: Partial<Record<string, number>> = {};
+    for (const config of configs) {
+      if (!config) continue;
+      for (const [level, value] of Object.entries(config)) {
+        if (typeof value === "number" && Number.isFinite(value)) {
+          merged[level] = Math.max(merged[level] ?? 1, value);
+        }
+      }
+    }
+    return Object.keys(merged).length ? merged : null;
+  };
+  const routeQualityMultipliers = (route: PredictedImageBillingRoute) => {
+    const child =
+      route.usesChildGroup && route.groupId
+        ? backendGroups.find((group) => group.id === route.groupId)
+            ?.qualityMultipliers
+        : null;
+    return mergeQualityMultipliers([
+      selectedBackendGroup?.qualityMultipliers,
+      child,
+    ]);
+  };
+  const textQualityMultiplier = resolveQualityBillingMultiplier(
+    routeQualityMultipliers(textBillingRoute),
+    quality
+  );
+  const editQualityMultiplier = resolveQualityBillingMultiplier(
+    routeQualityMultipliers(editBillingRoute),
+    quality
+  );
+  const chatQualityMultiplier = resolveQualityBillingMultiplier(
+    routeQualityMultipliers(chatBillingRoute),
+    quality
+  );
+  const agentQualityMultiplier = resolveQualityBillingMultiplier(
+    routeQualityMultipliers(agentBillingRoute),
+    quality
+  );
   const textImageCreditCost = useMemo(
     () =>
       applyBillingPreviewMultiplier(
         getPricedImageCreditCost(size, moderationCostOptions),
-        textBillingRoute.billingMultiplier
+        textBillingRoute.billingMultiplier * textQualityMultiplier
       ),
     [
       chatThinking,
@@ -3058,6 +3116,7 @@ export function CreatePageClient({
       quality,
       size,
       textBillingRoute.billingMultiplier,
+      textQualityMultiplier,
     ]
   );
   const textBatchCreditCost = textImageCreditCost * batchCount;
@@ -3068,11 +3127,11 @@ export function CreatePageClient({
           effectiveEditSize,
           getModerationCostOptions(editImages.length)
         ),
-        editBillingRoute.billingMultiplier
+        editBillingRoute.billingMultiplier * editQualityMultiplier
       )
     : applyBillingPreviewMultiplier(
         getPricedImageCreditCost(undefined, moderationCostOptions),
-        editBillingRoute.billingMultiplier
+        editBillingRoute.billingMultiplier * editQualityMultiplier
       );
   const editBatchCreditCost = editImageCreditCost * editBatchCount;
   // 倍率前明细与预估公式文案（与上方倍率后报价同源同参数，保证公式与数字自洽）。
@@ -3090,31 +3149,35 @@ export function CreatePageClient({
     baseCredits: textImageBaseBreakdown.baseCredits,
     moderationCredits: textImageBaseBreakdown.moderationCredits,
     multiplier: textBillingRoute.billingMultiplier,
+    qualityMultiplier: textQualityMultiplier,
   });
   const editCreditFormula = creditFormulaLabel({
     baseCredits: editImageBaseBreakdown.baseCredits,
     moderationCredits: editImageBaseBreakdown.moderationCredits,
     multiplier: editBillingRoute.billingMultiplier,
+    qualityMultiplier: editQualityMultiplier,
   });
   const chatRoundCreditFormula = creditFormulaLabel({
     baseLabel: { en: "round", zh: "轮次" },
     baseCredits: capabilities.billing.chatRoundCredits,
     moderationCredits: 0,
     multiplier: chatBillingRoute.billingMultiplier,
+    qualityMultiplier: chatQualityMultiplier,
   });
   const agentRoundCreditFormula = creditFormulaLabel({
     baseLabel: { en: "round", zh: "轮次" },
     baseCredits: capabilities.billing.agentRoundCredits,
     moderationCredits: 0,
     multiplier: agentBillingRoute.billingMultiplier,
+    qualityMultiplier: agentQualityMultiplier,
   });
   const chatRoundCreditCost = applyBillingPreviewMultiplier(
     capabilities.billing.chatRoundCredits,
-    chatBillingRoute.billingMultiplier
+    chatBillingRoute.billingMultiplier * chatQualityMultiplier
   );
   const agentRoundCreditCost = applyBillingPreviewMultiplier(
     capabilities.billing.agentRoundCredits,
-    agentBillingRoute.billingMultiplier
+    agentBillingRoute.billingMultiplier * agentQualityMultiplier
   );
   const chatSingleCreditCost =
     activeMode === "agent" ? agentRoundCreditCost : chatRoundCreditCost;
@@ -3174,9 +3237,9 @@ export function CreatePageClient({
       batchFallbackSize,
       getModerationCostOptions(chatImageAttachmentCount)
     ),
-    activeMode === "agent"
-      ? agentBillingRoute.billingMultiplier
-      : chatBillingRoute.billingMultiplier
+    (activeMode === "agent"
+      ? agentBillingRoute.billingMultiplier * agentQualityMultiplier
+      : chatBillingRoute.billingMultiplier * chatQualityMultiplier)
   );
   // chat/agent 会话内批量出图与轮次报价共用各自车道的预测倍率。
   const batchSingleBaseBreakdown = getPricedImageCreditBreakdown(
@@ -3190,6 +3253,8 @@ export function CreatePageClient({
       activeMode === "agent"
         ? agentBillingRoute.billingMultiplier
         : chatBillingRoute.billingMultiplier,
+    qualityMultiplier:
+      activeMode === "agent" ? agentQualityMultiplier : chatQualityMultiplier,
   });
   const chatSingleCreditFormula =
     activeMode === "agent" ? agentRoundCreditFormula : chatRoundCreditFormula;

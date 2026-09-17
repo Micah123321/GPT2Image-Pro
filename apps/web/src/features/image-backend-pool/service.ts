@@ -49,7 +49,7 @@ import {
 import { nanoid } from "nanoid";
 import { Pool } from "pg";
 import { parseApiModelMapping } from "@/features/image-generation/api-model-mapping";
-import { normalizeQualityBillingForStorage } from "@/features/image-generation/quality-billing";
+import { normalizeQualityBillingForStorage, parseQualityBilling } from "@/features/image-generation/quality-billing";
 
 import {
   type ChatGptWebAccountInfo,
@@ -4089,6 +4089,64 @@ export async function refreshImageBackendAccountsInfo(accountIds: string[]) {
   };
 }
 
+/**
+ * 每个分组的【质量计价倍率上限】：对组内启用成员（API + 账号）的 quality_billing
+ * 逐档取最大值。创作页报价无法预知实际命中哪个成员，按上限展示（不高估成本）。
+ * 实际扣费仍按调度命中的那个成员的配置解析（见 quality-billing.ts）。
+ */
+async function getImageBackendGroupQualityMultipliers(
+  groupIds: string[]
+): Promise<Map<string, Partial<Record<string, number>>>> {
+  const idSet = new Set(groupIds.filter(Boolean));
+  if (!idSet.size) return new Map();
+  const out = new Map<string, Partial<Record<string, number>>>();
+  const merge = (groupId: string | null, config: unknown): void => {
+    if (!groupId || !idSet.has(groupId)) return;
+    const parsed = parseQualityBilling(config);
+    for (const [level, value] of Object.entries(parsed)) {
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      const current = out.get(groupId) ?? {};
+      current[level] = Math.max(current[level] ?? 1, value);
+      out.set(groupId, current);
+    }
+  };
+  const [apiRows, accountRows] = await Promise.all([
+    db
+      .select({
+        junctionGroupId: imageBackendApiGroup.groupId,
+        groupId: imageBackendApi.groupId,
+        qualityBilling: imageBackendApi.qualityBilling,
+      })
+      .from(imageBackendApi)
+      .leftJoin(
+        imageBackendApiGroup,
+        eq(imageBackendApiGroup.apiId, imageBackendApi.id)
+      )
+      .where(eq(imageBackendApi.isEnabled, true)),
+    db
+      .select({
+        junctionGroupId: imageBackendAccountGroup.groupId,
+        groupId: imageBackendAccount.groupId,
+        qualityBilling: imageBackendAccount.qualityBilling,
+      })
+      .from(imageBackendAccount)
+      .leftJoin(
+        imageBackendAccountGroup,
+        eq(imageBackendAccountGroup.accountId, imageBackendAccount.id)
+      )
+      .where(eq(imageBackendAccount.isEnabled, true)),
+  ]);
+  for (const row of apiRows) {
+    merge(row.junctionGroupId, row.qualityBilling);
+    merge(row.groupId, row.qualityBilling);
+  }
+  for (const row of accountRows) {
+    merge(row.junctionGroupId, row.qualityBilling);
+    merge(row.groupId, row.qualityBilling);
+  }
+  return out;
+}
+
 export async function listImageBackendGroupOptions(options?: {
   userSelectableOnly?: boolean;
   plan?: SubscriptionPlan;
@@ -4116,7 +4174,7 @@ export async function listImageBackendGroupOptions(options?: {
         : eq(imageBackendGroup.isEnabled, true)
     )
     .orderBy(asc(imageBackendGroup.priority), asc(imageBackendGroup.createdAt));
-  return rows
+  const groupRows = rows
     .filter((group) =>
       plan ? canUseBackendGroupForPlan(group.metadata, plan) : true
     )
@@ -4127,6 +4185,13 @@ export async function listImageBackendGroupOptions(options?: {
       billingMultiplier: getGroupBillingMultiplier(metadata),
       childGroupIds: getGroupChildGroupIds(metadata),
     }));
+  const qualityMultipliers = await getImageBackendGroupQualityMultipliers(
+    groupRows.map((group) => group.id)
+  );
+  return groupRows.map((group) => ({
+    ...group,
+    qualityMultipliers: qualityMultipliers.get(group.id) ?? null,
+  }));
 }
 
 export async function listSelectableImageBackendGroups(

@@ -22,6 +22,8 @@ export type ImageBillingPreviewGroup = {
   name: string;
   backendType: ImageBackendGroupBackendType;
   billingMultiplier: number;
+  /** 组内成员质量计价倍率各档上限（见 service.ts getImageBackendGroupQualityMultipliers）。 */
+  qualityMultipliers?: Partial<Record<string, number>> | null;
   childGroupIds: readonly string[];
 };
 
