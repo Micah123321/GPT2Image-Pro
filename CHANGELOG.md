@@ -4,6 +4,22 @@
 
 ## 未发布
 
+## v0.9.3 (2026-09-20)
+
+本版将 ChatGPT Web 出口代理升级为多上游池：进程内健康探测与自动故障转移，
+消除单出口被 Cloudflare 拉黑时整条 Web 车道瘫痪的结构性风险。
+
+### 新增
+
+- **chatgpt-web-proxy 多上游出口池**：`CHATGPT_WEB_UPSTREAM_POOL` 配置逗号分隔的 socks5 出口（按优先级），每 60 秒以与业务一致的 TLS 指纹经各出口探测 chatgpt.com（任意 HTTP 状态码为健康，传输层错误为中毒），当前出口连续 3 次失败自动切换到健康备胎；切换时作废绑定旧出口的会话 client 与 cf_clearance（二者均绑定出口 IP）。探测周期与阈值可调，`/healthz` 暴露池状态（URL 凭据脱敏）。
+- **向后兼容**：未配置 POOL 时回落到 `CHATGPT_WEB_UPSTREAM_PROXY_URL`（等价单项池），两者均不配置时直连，存量部署行为不变；`CHATGPT_WEB_CLEARANCE_PROXY_URL` 未显式配置时自动跟随当前生效出口。
+- **部署配置面**：docker-compose 透传全部新变量，`.env.docker.example` 附说明与示例；README 新增「ChatGPT Web 出口代理与多上游故障转移」指引（含 WARP sidecar 片段与跨服务器出口部署三步）。
+
+### 升级说明
+
+- 本版本不包含数据库迁移。
+- 使用 ChatGPT Web 后端的部署建议至少配置两个不同网络路径的出口（如两台不同机房的服务器各跑一个 WARP）；同一台机器上的多个 WARP 出口 IP 相同，无轮换价值。
+
 ## v0.9.2 (2026-09-17)
 
 本版引入按质量档位的差异化计价与 API 出站模型映射，并统一账单明细与创作页
