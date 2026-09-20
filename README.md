@@ -251,6 +251,54 @@ cp .env.docker.example .env
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
+#### ChatGPT Web 出口代理与多上游故障转移
+
+ChatGPT Web 车道经 `chatgpt-web-proxy` 访问 chatgpt.com，机房 IP 通常被直接
+封禁，需要经 WARP 等 socks5 出口。Cloudflare 偶尔会拉黑某个出口 IP（表现为
+大量 `unexpected EOF` 与生成超时），因此推荐配置**多上游池**：sidecar 每 60 秒
+用与业务一致的 TLS 指纹探测各出口，当前出口连续失败自动切换到健康备胎。
+
+1）在 `docker-compose.yml` 增加 WARP 出口（同一 compose 网络内用服务名互访）：
+
+```yaml
+  warp-a:
+    image: caomingjun/warp
+    restart: unless-stopped
+    cap_add: [NET_ADMIN, MKNOD, AUDIT_WRITE]
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: 1
+    # 容器内监听 socks5 :1080；不要用 hostNetwork/privileged，
+    # 否则 WARP 的 TUN 接口会写进宿主机网络栈，可能弄断整机网络。
+```
+
+2）在 `.env` 配置出口池（逗号分隔、按优先级）：
+
+```bash
+# 单出口（最简）
+CHATGPT_WEB_UPSTREAM_PROXY_URL=socks5://warp-a:1080
+# 多出口（推荐；第二个可以是另一台服务器上的 WARP，带认证+公网地址）
+CHATGPT_WEB_UPSTREAM_POOL=socks5://warp-a:1080,socks5://user:pass@1.2.3.4:1080
+# 可选调优（默认值）
+CHATGPT_WEB_UPSTREAM_PROBE_INTERVAL_SECONDS=60
+CHATGPT_WEB_UPSTREAM_PROBE_FAILURES=3
+```
+
+多出口只有在**不同网络路径**下才有意义（不同机房各跑一个 WARP，出口 IP 落在
+不同 Cloudflare 接入点）；同一台机器开多个 WARP 出口 IP 相同，起不到轮换作用。
+跨服务器部署第二个 WARP 只需一次性三步：目标机器 `docker run` 同参数 WARP
+（建议经 `-e GOST_ARGS="-L socks5://user:pass@:1080"` 加认证并 `-p 1080:1080`）、
+防火墙只放行主服务器 IP 访问 1080、把地址填入上面的 POOL。
+
+3）验证与观测：
+
+```bash
+curl http://localhost:3021/healthz
+# upstreams[] 显示每个出口的 active/healthy/failures（URL 中凭据已脱敏）
+```
+
+不配置任何上游变量时 sidecar 直连，行为与旧版本一致；切换上游时会自动作废
+绑定旧出口的会话与 cf_clearance，无需人工干预。
+
 ### 方式二：源码部署
 
 适合已有自己的 PostgreSQL、Nginx、对象存储和发布流程的环境。需要你自行准备数据库、守护 Web 进程与 Go sidecar。下分三个模块。
