@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -56,17 +57,21 @@ type sessionClient struct {
 }
 
 type server struct {
-	secret        string
-	profileName   string
-	timeoutSecs   int
-	upstreamProxy string
-	maxBodyBytes  int64
+	secret       string
+	profileName  string
+	timeoutSecs  int
+	maxBodyBytes int64
+
+	// 上游出口池（多上游 + 健康探测 + 故障转移）。空池 = 直连（与旧版单上游
+	// 未配置时行为一致）。见 upstream.go。
+	pool *upstreamPool
+	// 显式配置的 clearance 代理覆盖；为空时跟随 pool 当前生效上游。
+	clearanceProxyOverride string
 
 	// cf_clearance 后备(仿 chatgpt2api):命中 Cloudflare 挑战时经 FlareSolverr(走同一 WARP 出口)
 	// 解挑战、拿 cf_clearance+UA,注入会话 cookie jar 并覆盖 UA/Sec-Ch-Ua 后重试。默认启用、惰性。
 	clearanceEnabled bool
 	flareSolverrURL  string
-	clearanceProxy   string
 	clearanceTimeout int
 	clearanceRefresh int
 
@@ -75,30 +80,51 @@ type server struct {
 }
 
 func main() {
-	upstreamProxy := strings.TrimSpace(os.Getenv("CHATGPT_WEB_UPSTREAM_PROXY_URL"))
+	// 上游池：优先读逗号分隔的 POOL；未配置时回落到旧单上游变量（等价单项池），
+	// 两者都为空则直连。标准部署经 docker-compose/.env 注入，见 .env.docker.example。
+	upstreamURLs := parseUpstreamList(os.Getenv("CHATGPT_WEB_UPSTREAM_POOL"))
+	if len(upstreamURLs) == 0 {
+		if single := strings.TrimSpace(os.Getenv("CHATGPT_WEB_UPSTREAM_PROXY_URL")); single != "" {
+			upstreamURLs = []string{single}
+		}
+	}
+	pool := newUpstreamPool(
+		upstreamURLs,
+		envInt("CHATGPT_WEB_UPSTREAM_PROBE_FAILURES", defaultProbeFailures),
+		time.Duration(envInt("CHATGPT_WEB_UPSTREAM_PROBE_INTERVAL_SECONDS", int(defaultProbeInterval/time.Second)))*time.Second,
+		envString("CHATGPT_WEB_UPSTREAM_PROBE_URL", defaultProbeURL),
+	)
+
 	s := &server{
-		secret:        strings.TrimSpace(os.Getenv("CHATGPT_WEB_PROXY_SECRET")),
-		profileName:   envString("CHATGPT_WEB_PROXY_PROFILE", defaultProfile),
-		timeoutSecs:   envInt("CHATGPT_WEB_PROXY_TIMEOUT_SECONDS", defaultTimeoutSecs),
-		upstreamProxy: upstreamProxy,
-		maxBodyBytes:  int64(envInt("CHATGPT_WEB_PROXY_MAX_BODY_MB", defaultMaxBodyMB)) * 1024 * 1024,
-		// 默认启用(设 CHATGPT_WEB_CLEARANCE_MODE=off 关);出口默认复用 WARP 上游、FlareSolverr 同网络。
+		secret:                 strings.TrimSpace(os.Getenv("CHATGPT_WEB_PROXY_SECRET")),
+		profileName:            envString("CHATGPT_WEB_PROXY_PROFILE", defaultProfile),
+		timeoutSecs:            envInt("CHATGPT_WEB_PROXY_TIMEOUT_SECONDS", defaultTimeoutSecs),
+		maxBodyBytes:           int64(envInt("CHATGPT_WEB_PROXY_MAX_BODY_MB", defaultMaxBodyMB)) * 1024 * 1024,
+		pool:                   pool,
+		clearanceProxyOverride: strings.TrimSpace(os.Getenv("CHATGPT_WEB_CLEARANCE_PROXY_URL")),
+		// 默认启用(设 CHATGPT_WEB_CLEARANCE_MODE=off 关);出口默认跟随上游池、FlareSolverr 同网络。
 		clearanceEnabled: !strings.EqualFold(envString("CHATGPT_WEB_CLEARANCE_MODE", "flaresolverr"), "off"),
 		flareSolverrURL:  envString("FLARESOLVERR_URL", "http://flaresolverr:8191"),
-		clearanceProxy:   envString("CHATGPT_WEB_CLEARANCE_PROXY_URL", upstreamProxy),
 		clearanceTimeout: envInt("CHATGPT_WEB_CLEARANCE_TIMEOUT_SECONDS", 60),
 		clearanceRefresh: envInt("CHATGPT_WEB_CLEARANCE_REFRESH_SECONDS", 3600),
 		clients:          map[string]*sessionClient{},
 	}
+	// 切换上游后：会话 client 与 cf_clearance 都绑定旧出口 IP，必须整体作废重建。
+	pool.onSwitch = func(oldURL, newURL string) {
+		s.resetSessionClients()
+		resetClearance()
+	}
 
 	go s.cleanupLoop()
+	go pool.Run(context.Background())
 
 	mux := stdhttp.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/request", s.handleRequest)
 
 	bind := envString("CHATGPT_WEB_PROXY_BIND", defaultBind)
-	log.Printf("chatgpt-web-proxy listening on %s profile=%s", bind, s.profileName)
+	log.Printf("chatgpt-web-proxy listening on %s profile=%s upstreams=%d active=%s",
+		bind, s.profileName, len(upstreamURLs), maskProxyCredential(pool.ActiveURL()))
 	if err := stdhttp.ListenAndServe(bind, mux); err != nil {
 		log.Fatal(err)
 	}
@@ -125,7 +151,10 @@ func envInt(key string, fallback int) int {
 }
 
 func (s *server) handleHealth(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
-	writeJSON(w, stdhttp.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, stdhttp.StatusOK, map[string]any{
+		"status":    "ok",
+		"upstreams": s.pool.Status(),
+	})
 }
 
 func (s *server) handleRequest(w stdhttp.ResponseWriter, r *stdhttp.Request) {
@@ -347,8 +376,13 @@ func (s *server) refreshClearance() (string, []*fhttp.Cookie) {
 		"url":        chatGPTOrigin + "/",
 		"maxTimeout": s.clearanceTimeout * 1000,
 	}
-	if s.clearanceProxy != "" {
-		reqBody["proxy"] = map[string]string{"url": s.clearanceProxy}
+	// clearance 代理：显式配置优先，否则跟随上游池当前生效出口（cf_clearance 绑出口 IP）。
+	clearanceProxy := s.clearanceProxyOverride
+	if clearanceProxy == "" {
+		clearanceProxy = s.pool.ActiveURL()
+	}
+	if clearanceProxy != "" {
+		reqBody["proxy"] = map[string]string{"url": clearanceProxy}
 	}
 	buf, _ := json.Marshal(reqBody)
 	httpClient := &stdhttp.Client{Timeout: time.Duration(s.clearanceTimeout+20) * time.Second}
@@ -505,8 +539,8 @@ func (s *server) getClient(sessionKey string) (tls_client.HttpClient, error) {
 		tls_client.WithDisableHttp3(),
 		tls_client.WithCatchPanics(),
 	}
-	if s.upstreamProxy != "" {
-		options = append(options, tls_client.WithProxyUrl(s.upstreamProxy))
+	if upstream := s.pool.ActiveURL(); upstream != "" {
+		options = append(options, tls_client.WithProxyUrl(upstream))
 	}
 
 	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), options...)
@@ -531,6 +565,27 @@ func (s *server) cleanupLoop() {
 		}
 		s.mu.Unlock()
 	}
+}
+
+// resetSessionClients 作废全部会话 client（上游切换后调用）：tls-client 绑定
+// 建连时的代理出口，旧 client 会继续走已中毒的旧出口。下次请求按需重建。
+func (s *server) resetSessionClients() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, item := range s.clients {
+		item.client.CloseIdleConnections()
+		delete(s.clients, key)
+	}
+}
+
+// resetClearance 作废全局 cf_clearance（上游切换后调用）：cf_clearance 绑定
+// 出口 IP + UA，换出口后旧值必然失效，留着只会注入无效 cookie。
+func resetClearance() {
+	clrMu.Lock()
+	defer clrMu.Unlock()
+	clrUA = ""
+	clrCookies = nil
+	clrExpires = time.Time{}
 }
 
 func readLimited(reader io.Reader, limit int64) ([]byte, error) {
